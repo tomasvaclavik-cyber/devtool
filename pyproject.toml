@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "devtool"
+name = "ote"
 version = "0.1.0"
-description = "CLI nástroj pro automatizaci vývoje"
+description = "CLI nástroj pro zobrazení spotových cen elektřiny z OTE"
 requires-python = ">=3.10"
 dependencies = [
     "click>=8.1.0",
@@ -22,7 +22,7 @@ dev = [
 ]
 
 [project.scripts]
-devtool = "devtool.cli:main"
+ote = "ote.cli:main"
 
 [tool.ruff]
 line-length = 100
@@ -37,4 +37,4 @@ strict = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-v --cov=src/devtool --cov-report=term-missing"
+addopts = "-v --cov=src/ote --cov-report=term-missing"

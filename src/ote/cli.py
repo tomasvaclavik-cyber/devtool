@@ -6,8 +6,8 @@ import click
 from rich.console import Console
 from rich.table import Table
 
-from devtool import __version__
-from devtool.ote import fetch_spot_prices, get_current_price
+from ote import __version__
+from ote.spot import fetch_spot_prices, get_current_price
 
 console = Console()
 
@@ -15,37 +15,14 @@ console = Console()
 @click.group()
 @click.version_option(version=__version__)
 def main() -> None:
-    """DevTool - CLI nástroj pro automatizaci vývoje."""
+    """OTE - Spotové ceny elektřiny z OTE."""
     pass
 
 
 @main.command()
-@click.argument("name")
-def init(name: str) -> None:
-    """Inicializuje nový projekt s daným názvem."""
-    console.print(f"[green]Inicializuji projekt:[/green] {name}")
-
-
-@main.command()
-@click.option("--fix", is_flag=True, help="Automaticky opravit problémy")
-def lint(fix: bool) -> None:
-    """Spustí linting na zdrojovém kódu."""
-    if fix:
-        console.print("[yellow]Spouštím linting s opravami...[/yellow]")
-    else:
-        console.print("[blue]Spouštím linting...[/blue]")
-
-
-@main.command()
-def build() -> None:
-    """Sestaví projekt."""
-    console.print("[cyan]Sestavuji projekt...[/cyan]")
-
-
-@main.command()
 @click.option("--date", "-d", "report_date", default=None, help="Datum (YYYY-MM-DD), výchozí dnes")
-@click.option("--all", "-a", "show_all", is_flag=True, help="Zobrazit všechny hodiny")
-def ote(report_date: str | None, show_all: bool) -> None:
+@click.option("--all", "-a", "show_all", is_flag=True, help="Zobrazit všechny 15min intervaly")
+def spot(report_date: str | None, show_all: bool) -> None:
     """Zobrazí spotové ceny elektřiny z OTE v CZK."""
     try:
         if report_date:

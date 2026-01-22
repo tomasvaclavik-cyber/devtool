@@ -11,20 +11,20 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 
 # Run the CLI
-devtool --help
-devtool init <project-name>
-devtool lint [--fix]
-devtool build
+ote --help
+ote spot                  # aktuální spotová cena
+ote spot --all            # všechny 15min intervaly
+ote spot -d 2026-01-21    # data pro konkrétní den
 
 # Run tests
 pytest                    # all tests
 pytest tests/test_cli.py  # specific file
-pytest -k "test_init"     # specific test by name
+pytest -k "test_version"  # specific test by name
 
 # Linting & formatting
-ruff check src tests      # check for issues
-ruff check --fix src tests # auto-fix issues
-ruff format src tests     # format code
+ruff check src tests
+ruff check --fix src tests
+ruff format src tests
 
 # Type checking
 mypy src
@@ -32,18 +32,12 @@ mypy src
 
 ## Architecture
 
-- **src/devtool/cli.py** - Main CLI entry point using Click. All commands are defined here as `@main.command()` decorated functions.
-- **src/devtool/__init__.py** - Package init, contains version string.
-- **tests/** - pytest tests using Click's CliRunner for testing CLI commands.
+- **src/ote/cli.py** - Main CLI entry point using Click. Commands defined as `@main.command()`.
+- **src/ote/spot.py** - OTE API client for fetching spot prices, CNB exchange rate.
+- **src/ote/__init__.py** - Package init, contains version string.
+- **tests/** - pytest tests using Click's CliRunner.
 
-## CLI Framework
+## Data Sources
 
-Uses [Click](https://click.palletsprojects.com/) for command-line interface with [Rich](https://rich.readthedocs.io/) for formatted console output. New commands should follow the pattern in `cli.py`:
-
-```python
-@main.command()
-@click.option("--flag", is_flag=True, help="Description")
-def command_name(flag: bool) -> None:
-    """Command docstring shown in --help."""
-    console.print("[color]message[/color]")
-```
+- **OTE** (ote-cr.cz) - Czech electricity market operator, provides 15-minute spot prices
+- **ČNB** (cnb.cz) - Czech National Bank, provides EUR/CZK exchange rate
