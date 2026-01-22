@@ -7,10 +7,20 @@ import pytest
 
 from ote.analysis import (
     HourlyPattern,
+    MovingAverageDay,
+    NegativePriceStats,
+    PriceDistribution,
+    PriceTrend,
     classify_price,
     get_best_hours,
     get_hourly_patterns,
+    get_moving_averages,
+    get_negative_price_forecast,
+    get_negative_price_hours_list,
+    get_negative_price_stats,
+    get_price_distribution,
     get_price_level_color,
+    get_price_trend,
     get_weekday_hour_heatmap_data,
     get_worst_hours,
 )
@@ -205,3 +215,167 @@ def test_hourly_pattern_dataclass() -> None:
     assert pattern.min_price == 1200.0
     assert pattern.max_price == 1800.0
     assert pattern.sample_count == 100
+
+
+# --- Tests for negative price analysis ---
+
+
+def create_prices_with_negatives(target_date: date) -> list[SpotPrice]:
+    """Vytvoří ceny pro daný den s několika negativními cenami."""
+    prices = []
+    for hour in range(24):
+        for quarter in range(4):
+            minute = quarter * 15
+            time_from = datetime(
+                target_date.year, target_date.month, target_date.day, hour, minute
+            )
+            time_to = datetime(
+                target_date.year, target_date.month, target_date.day, hour, minute + 14, 59
+            )
+            # Negativní ceny v hodinách 2-4
+            if 2 <= hour <= 4:
+                base_price = -10.0
+            else:
+                base_price = 50.0
+
+            prices.append(SpotPrice(
+                time_from=time_from,
+                time_to=time_to,
+                price_eur=base_price,
+                price_czk=base_price * 25.0,
+            ))
+    return prices
+
+
+@pytest.fixture
+def db_with_negatives(test_db: sqlite3.Connection) -> sqlite3.Connection:
+    """Databáze s negativními cenami."""
+    today = date.today()
+    for i in range(10):
+        day = today - timedelta(days=i)
+        prices = create_prices_with_negatives(day)
+        save_prices(test_db, day, prices, 25.0)
+    return test_db
+
+
+def test_get_negative_price_stats(db_with_negatives: sqlite3.Connection) -> None:
+    """Test statistik negativních cen."""
+    stats = get_negative_price_stats(db_with_negatives, days_back=30)
+
+    assert isinstance(stats, NegativePriceStats)
+    assert stats.count > 0
+    assert stats.avg_negative_price is not None
+    assert stats.avg_negative_price < 0
+    assert stats.min_price is not None
+    assert stats.min_price < 0
+    assert isinstance(stats.hours_distribution, dict)
+    # Hodiny 2, 3, 4 by měly být v distribuci
+    hours_dist = stats.hours_distribution
+    assert any(h in hours_dist for h in [2, 3, 4])
+
+
+def test_get_negative_price_stats_no_negatives(populated_db: sqlite3.Connection) -> None:
+    """Test statistik když nejsou negativní ceny."""
+    stats = get_negative_price_stats(populated_db, days_back=30)
+
+    assert isinstance(stats, NegativePriceStats)
+    assert stats.count == 0
+    assert stats.avg_negative_price is None
+    assert stats.min_price is None
+    assert stats.hours_distribution == {}
+
+
+def test_get_negative_price_hours_list(db_with_negatives: sqlite3.Connection) -> None:
+    """Test seznamu hodin s negativními cenami."""
+    hours = get_negative_price_hours_list(db_with_negatives, days_back=30)
+
+    assert len(hours) > 0
+    for h in hours:
+        assert h.date is not None
+        assert h.hour is not None
+        assert h.price_czk is not None
+        assert h.price_czk <= 0
+
+
+def test_get_negative_price_forecast(db_with_negatives: sqlite3.Connection) -> None:
+    """Test predikce negativních cen."""
+    risky_hours = get_negative_price_forecast(db_with_negatives)
+
+    # Hodiny 2, 3, 4 mají negativní ceny každý den (10 dnů > 3 výskytů)
+    assert 2 in risky_hours or 3 in risky_hours or 4 in risky_hours
+    assert all(0 <= h <= 23 for h in risky_hours)
+
+
+def test_get_negative_price_forecast_no_negatives(populated_db: sqlite3.Connection) -> None:
+    """Test predikce když nejsou negativní ceny."""
+    risky_hours = get_negative_price_forecast(populated_db)
+    assert risky_hours == []
+
+
+# --- Tests for trends and distribution ---
+
+
+def test_get_price_distribution(populated_db: sqlite3.Connection) -> None:
+    """Test distribuce cen."""
+    dist = get_price_distribution(populated_db, days_back=14)
+
+    assert isinstance(dist, PriceDistribution)
+    assert len(dist.bins) > 0
+    assert len(dist.counts) == len(dist.bins)
+    assert "p10" in dist.percentiles
+    assert "p25" in dist.percentiles
+    assert "p50" in dist.percentiles
+    assert "p75" in dist.percentiles
+    assert "p90" in dist.percentiles
+
+    # Percentily by měly být seřazené
+    p = dist.percentiles
+    assert p["p10"] <= p["p25"] <= p["p50"] <= p["p75"] <= p["p90"]
+
+
+def test_get_price_distribution_empty(test_db: sqlite3.Connection) -> None:
+    """Test distribuce na prázdné databázi."""
+    dist = get_price_distribution(test_db, days_back=30)
+
+    assert isinstance(dist, PriceDistribution)
+    assert dist.bins == []
+    assert dist.counts == []
+    assert dist.percentiles == {}
+
+
+def test_get_moving_averages(populated_db: sqlite3.Connection) -> None:
+    """Test klouzavých průměrů."""
+    ma = get_moving_averages(populated_db, days_back=14)
+
+    assert len(ma) > 0
+    for item in ma:
+        assert isinstance(item, MovingAverageDay)
+        assert item.date is not None
+        assert item.daily_avg is not None
+
+    # 7denní MA by měl být dostupný po 7 dnech
+    items_with_ma7 = [i for i in ma if i.ma7 is not None]
+    assert len(items_with_ma7) > 0
+
+
+def test_get_moving_averages_empty(test_db: sqlite3.Connection) -> None:
+    """Test klouzavých průměrů na prázdné databázi."""
+    ma = get_moving_averages(test_db, days_back=30)
+    assert ma == []
+
+
+def test_get_price_trend(populated_db: sqlite3.Connection) -> None:
+    """Test trendu cen."""
+    trend = get_price_trend(populated_db, days_back=7)
+
+    assert isinstance(trend, PriceTrend)
+    assert trend.direction in ["rostoucí", "klesající", "stabilní", "nedostatek dat"]
+
+
+def test_get_price_trend_insufficient_data(test_db: sqlite3.Connection) -> None:
+    """Test trendu s nedostatkem dat."""
+    trend = get_price_trend(test_db, days_back=30)
+
+    assert isinstance(trend, PriceTrend)
+    assert trend.direction == "nedostatek dat"
+    assert trend.change_percent is None

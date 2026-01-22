@@ -269,7 +269,13 @@ def show_analysis_tab() -> None:
         classify_price,
         get_best_hours,
         get_hourly_patterns,
+        get_moving_averages,
+        get_negative_price_forecast,
+        get_negative_price_hours_list,
+        get_negative_price_stats,
+        get_price_distribution,
         get_price_level_color,
+        get_price_trend,
         get_weekday_hour_heatmap_data,
         get_worst_hours,
     )
@@ -381,6 +387,212 @@ def show_analysis_tab() -> None:
             f"Týdenní heatmapa vyžaduje alespoň 14 dnů dat. "
             f"Aktuálně máte {days_count} dnů."
         )
+
+    # --- Negativní ceny ---
+    st.markdown("---")
+    st.subheader("Negativní ceny")
+
+    neg_stats_30 = get_negative_price_stats(conn, days_back=30)
+    neg_stats_7 = get_negative_price_stats(conn, days_back=7)
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.metric(
+            "Negativní hodiny (30 dní)",
+            f"{neg_stats_30.count}",
+            help="Počet hodin s cenou <= 0 CZK/MWh",
+        )
+
+    with col2:
+        st.metric(
+            "Negativní hodiny (7 dní)",
+            f"{neg_stats_7.count}",
+        )
+
+    with col3:
+        min_price = neg_stats_30.min_price
+        if min_price is not None:
+            st.metric("Nejnižší cena", f"{min_price:,.0f} CZK/MWh")
+        else:
+            st.metric("Nejnižší cena", "N/A")
+
+    # Alert pro zítřejší predikci negativních cen
+    risky_hours = get_negative_price_forecast(conn)
+    if risky_hours:
+        hours_str = ", ".join(f"{h}:00" for h in risky_hours)
+        st.warning(
+            f"Pozor: Na základě historie mohou být zítra negativní ceny "
+            f"v těchto hodinách: {hours_str}"
+        )
+
+    # Graf typických hodin s negativními cenami
+    hours_dist = neg_stats_30.hours_distribution
+    if hours_dist:
+        dist_df = pd.DataFrame([
+            {"Hodina": h, "Počet": c}
+            for h, c in sorted(hours_dist.items())
+        ])
+
+        dist_chart = (
+            alt.Chart(dist_df)
+            .mark_bar(color="#dc3545")
+            .encode(
+                x=alt.X("Hodina:O", title="Hodina"),
+                y=alt.Y("Počet:Q", title="Počet výskytů"),
+                tooltip=["Hodina", "Počet"],
+            )
+            .properties(height=200, title="Typické hodiny s negativními cenami")
+        )
+
+        st.altair_chart(dist_chart, use_container_width=True)
+
+    # Historie negativních cen
+    neg_hours = get_negative_price_hours_list(conn, days_back=30)
+    if neg_hours:
+        with st.expander("Historie negativních cen (posledních 30 dní)"):
+            neg_df = pd.DataFrame([
+                {
+                    "Datum": h.date.strftime("%d.%m.%Y"),
+                    "Hodina": f"{h.hour:02d}:00",
+                    "Cena (CZK/MWh)": f"{h.price_czk:,.0f}",
+                }
+                for h in neg_hours
+            ])
+            st.dataframe(neg_df, use_container_width=True, hide_index=True)
+    else:
+        st.info("Za posledních 30 dní nebyly zaznamenány žádné negativní ceny.")
+
+    # --- Cenové trendy ---
+    st.markdown("---")
+    st.subheader("Cenové trendy")
+
+    # Distribuce a percentily
+    distribution = get_price_distribution(conn, days_back=30)
+    trend = get_price_trend(conn, days_back=30)
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        percentiles = distribution.percentiles
+        median = percentiles.get("p50")
+        if median is not None:
+            st.metric("Medián (30 dní)", f"{median:,.0f} CZK/MWh")
+        else:
+            st.metric("Medián (30 dní)", "N/A")
+
+    with col2:
+        direction = trend.direction
+        change = trend.change_percent
+        if change is not None:
+            delta_str = f"{change:+.1f}%"
+            st.metric(
+                "Trend",
+                direction,
+                delta=delta_str,
+                delta_color="inverse",  # Nižší cena = lepší
+            )
+        else:
+            st.metric("Trend", direction)
+
+    with col3:
+        p90 = percentiles.get("p90")
+        if p90 is not None:
+            st.metric("90. percentil", f"{p90:,.0f} CZK/MWh")
+        else:
+            st.metric("90. percentil", "N/A")
+
+    # Tabulka percentilů
+    if percentiles:
+        with st.expander("Percentily cen"):
+            p10 = percentiles.get("p10", 0)
+            p25 = percentiles.get("p25", 0)
+            p50 = percentiles.get("p50", 0)
+            p75 = percentiles.get("p75", 0)
+            p90_val = percentiles.get("p90", 0)
+            perc_df = pd.DataFrame([
+                {"Percentil": "10%", "Cena (CZK/MWh)": f"{p10:,.0f}"},
+                {"Percentil": "25%", "Cena (CZK/MWh)": f"{p25:,.0f}"},
+                {"Percentil": "50% (medián)", "Cena (CZK/MWh)": f"{p50:,.0f}"},
+                {"Percentil": "75%", "Cena (CZK/MWh)": f"{p75:,.0f}"},
+                {"Percentil": "90%", "Cena (CZK/MWh)": f"{p90_val:,.0f}"},
+            ])
+            st.dataframe(perc_df, use_container_width=True, hide_index=True)
+
+    # Histogram distribuce cen
+    bins = distribution.bins
+    counts = distribution.counts
+
+    if bins and counts:
+        hist_df = pd.DataFrame({
+            "Cenové pásmo": bins,
+            "Počet": counts,
+        })
+
+        hist_chart = (
+            alt.Chart(hist_df)
+            .mark_bar(color="#1f77b4")
+            .encode(
+                x=alt.X("Cenové pásmo:N", title="Cena (CZK/MWh)", sort=None),
+                y=alt.Y("Počet:Q", title="Počet hodin"),
+                tooltip=["Cenové pásmo", "Počet"],
+            )
+            .properties(height=250, title="Distribuce cen (histogram)")
+        )
+
+        st.altair_chart(hist_chart, use_container_width=True)
+
+    # Graf trendu s klouzavými průměry
+    if days_count >= 14:
+        ma_data = get_moving_averages(conn, days_back=60)
+
+        if ma_data:
+            ma_df = pd.DataFrame([
+                {
+                    "Datum": d.date,
+                    "Denní průměr": d.daily_avg,
+                    "7denní MA": d.ma7,
+                    "30denní MA": d.ma30,
+                }
+                for d in ma_data
+            ])
+
+            # Reshape pro Altair
+            ma_long = ma_df.melt(
+                id_vars=["Datum"],
+                value_vars=["Denní průměr", "7denní MA", "30denní MA"],
+                var_name="Typ",
+                value_name="Cena",
+            )
+
+            # Filtruj None hodnoty
+            ma_long = ma_long.dropna(subset=["Cena"])
+
+            trend_chart = (
+                alt.Chart(ma_long)
+                .mark_line()
+                .encode(
+                    x=alt.X("Datum:T", title="Datum"),
+                    y=alt.Y("Cena:Q", title="Cena (CZK/MWh)"),
+                    color=alt.Color(
+                        "Typ:N",
+                        scale=alt.Scale(
+                            domain=["Denní průměr", "7denní MA", "30denní MA"],
+                            range=["#aaaaaa", "#1f77b4", "#ff7f0e"],
+                        ),
+                    ),
+                    strokeWidth=alt.condition(
+                        alt.datum.Typ == "Denní průměr",
+                        alt.value(1),
+                        alt.value(2),
+                    ),
+                    tooltip=["Datum", "Typ", "Cena"],
+                )
+                .properties(height=300, title="Vývoj cen s klouzavými průměry")
+                .interactive()
+            )
+
+            st.altair_chart(trend_chart, use_container_width=True)
 
     conn.close()
 

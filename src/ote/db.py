@@ -2,6 +2,7 @@
 
 import os
 import sqlite3
+from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
@@ -300,3 +301,95 @@ def get_overall_stats(conn: sqlite3.Connection, days_back: int = 30) -> dict[str
             "count": row["count"],
         }
     return None
+
+
+@dataclass
+class NegativePriceHour:
+    """Hodina s negativní cenou."""
+
+    date: date
+    hour: int
+    price_czk: float
+
+
+@dataclass
+class DailyAverage:
+    """Denní průměry cen."""
+
+    date: date
+    avg_price: float
+    min_price: float
+    max_price: float
+
+
+def get_negative_price_hours(
+    conn: sqlite3.Connection,
+    days_back: int = 30,
+) -> list[NegativePriceHour]:
+    """Vrátí hodiny s negativní nebo nulovou cenou.
+
+    Returns:
+        Seznam NegativePriceHour.
+    """
+    init_db(conn)
+
+    cursor = conn.execute(
+        """
+        SELECT
+            report_date,
+            CAST(strftime('%H', time_from) AS INTEGER) as hour,
+            MIN(price_czk) as price_czk
+        FROM spot_prices
+        WHERE report_date >= date('now', ?)
+          AND price_czk <= 0
+        GROUP BY report_date, hour
+        ORDER BY report_date DESC, hour
+        """,
+        (f"-{days_back} days",),
+    )
+
+    return [
+        NegativePriceHour(
+            date=date.fromisoformat(row["report_date"]),
+            hour=row["hour"],
+            price_czk=row["price_czk"],
+        )
+        for row in cursor.fetchall()
+    ]
+
+
+def get_daily_averages(
+    conn: sqlite3.Connection,
+    days_back: int = 60,
+) -> list[DailyAverage]:
+    """Vrátí denní průměry cen.
+
+    Returns:
+        Seznam DailyAverage.
+    """
+    init_db(conn)
+
+    cursor = conn.execute(
+        """
+        SELECT
+            report_date,
+            AVG(price_czk) as avg_price,
+            MIN(price_czk) as min_price,
+            MAX(price_czk) as max_price
+        FROM spot_prices
+        WHERE report_date >= date('now', ?)
+        GROUP BY report_date
+        ORDER BY report_date
+        """,
+        (f"-{days_back} days",),
+    )
+
+    return [
+        DailyAverage(
+            date=date.fromisoformat(row["report_date"]),
+            avg_price=row["avg_price"],
+            min_price=row["min_price"],
+            max_price=row["max_price"],
+        )
+        for row in cursor.fetchall()
+    ]
