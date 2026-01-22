@@ -1,19 +1,28 @@
 """Databázový modul pro ukládání spotových cen."""
 
+import os
 import sqlite3
 from datetime import date, datetime
 from pathlib import Path
 
 from ote.spot import SpotPrice
 
-# Výchozí cesta k databázi v home adresáři
-DEFAULT_DB_PATH = Path.home() / ".ote" / "prices.db"
+
+def get_default_db_path() -> Path:
+    """Vrátí výchozí cestu k databázi.
+
+    Používá OTE_DB_PATH env proměnnou, nebo ~/.ote/prices.db
+    """
+    env_path = os.environ.get("OTE_DB_PATH")
+    if env_path:
+        return Path(env_path)
+    return Path.home() / ".ote" / "prices.db"
 
 
 def get_connection(db_path: Path | None = None) -> sqlite3.Connection:
     """Vytvoří připojení k databázi."""
     if db_path is None:
-        db_path = DEFAULT_DB_PATH
+        db_path = get_default_db_path()
 
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
