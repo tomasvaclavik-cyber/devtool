@@ -43,7 +43,8 @@ def spot(report_date: str | None, show_all: bool) -> None:
 
         if current and not show_all:
             console.print()
-            console.print(f"[bold green]Aktuální cena ({current.time_from.strftime('%H:%M')} - {current.time_to.strftime('%H:%M')}):[/bold green]")
+            time_range = f"{current.time_from:%H:%M} - {current.time_to:%H:%M}"
+            console.print(f"[bold green]Aktuální cena ({time_range}):[/bold green]")
             console.print(f"[bold yellow]{current.price_czk:.2f} CZK/MWh[/bold yellow]")
             console.print()
 
@@ -53,7 +54,7 @@ def spot(report_date: str | None, show_all: bool) -> None:
             table.add_column("Cena (CZK/MWh)", justify="right", style="yellow")
 
             for price in prices:
-                hour_str = f"{price.time_from.strftime('%H:%M')} - {price.time_to.strftime('%H:%M')}"
+                hour_str = f"{price.time_from:%H:%M} - {price.time_to:%H:%M}"
                 is_current = current and price.time_from == current.time_from
                 if is_current:
                     table.add_row(f"[bold]{hour_str}[/bold]", f"[bold]{price.price_czk:.2f}[/bold]")

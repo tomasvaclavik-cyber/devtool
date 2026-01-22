@@ -7,8 +7,13 @@ import httpx
 
 OTE_BASE_URL = "https://www.ote-cr.cz"
 # Anglická verze API vrací title u dataLine, což umožňuje rozlišit cenu od objemu
-OTE_CHART_DATA_URL = f"{OTE_BASE_URL}/en/short-term-markets/electricity/day-ahead-market/@@chart-data"
-CNB_RATE_URL = "https://www.cnb.cz/en/financial-markets/foreign-exchange-market/central-bank-exchange-rate-fixing/central-bank-exchange-rate-fixing/daily.txt"
+OTE_CHART_DATA_URL = (
+    f"{OTE_BASE_URL}/en/short-term-markets/electricity/day-ahead-market/@@chart-data"
+)
+CNB_RATE_URL = (
+    "https://www.cnb.cz/en/financial-markets/foreign-exchange-market/"
+    "central-bank-exchange-rate-fixing/central-bank-exchange-rate-fixing/daily.txt"
+)
 
 
 @dataclass
