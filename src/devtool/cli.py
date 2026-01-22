@@ -46,7 +46,7 @@ def build() -> None:
 @click.option("--date", "-d", "report_date", default=None, help="Datum (YYYY-MM-DD), výchozí dnes")
 @click.option("--all", "-a", "show_all", is_flag=True, help="Zobrazit všechny hodiny")
 def ote(report_date: str | None, show_all: bool) -> None:
-    """Zobrazí spotové ceny elektřiny z OTE."""
+    """Zobrazí spotové ceny elektřiny z OTE v CZK."""
     try:
         if report_date:
             dt = date.fromisoformat(report_date)
@@ -54,32 +54,34 @@ def ote(report_date: str | None, show_all: bool) -> None:
             dt = date.today()
 
         console.print(f"[cyan]Načítám spotové ceny pro {dt}...[/cyan]")
-        prices = fetch_spot_prices(dt)
+        prices, eur_czk_rate = fetch_spot_prices(dt)
 
         if not prices:
             console.print("[red]Žádná data nejsou k dispozici.[/red]")
             return
+
+        console.print(f"[dim]Kurz ČNB: 1 EUR = {eur_czk_rate:.3f} CZK[/dim]")
 
         current = get_current_price(prices)
 
         if current and not show_all:
             console.print()
             console.print(f"[bold green]Aktuální cena ({current.time_from.strftime('%H:%M')} - {current.time_to.strftime('%H:%M')}):[/bold green]")
-            console.print(f"[bold yellow]{current.price_eur:.2f} EUR/MWh[/bold yellow]")
+            console.print(f"[bold yellow]{current.price_czk:.2f} CZK/MWh[/bold yellow]")
             console.print()
 
         if show_all or not current:
             table = Table(title=f"Spotové ceny OTE - {dt}")
             table.add_column("Hodina", style="cyan")
-            table.add_column("Cena (EUR/MWh)", justify="right", style="yellow")
+            table.add_column("Cena (CZK/MWh)", justify="right", style="yellow")
 
             for price in prices:
                 hour_str = f"{price.time_from.strftime('%H:%M')} - {price.time_to.strftime('%H:%M')}"
                 is_current = current and price.time_from == current.time_from
                 if is_current:
-                    table.add_row(f"[bold]{hour_str}[/bold]", f"[bold]{price.price_eur:.2f}[/bold]")
+                    table.add_row(f"[bold]{hour_str}[/bold]", f"[bold]{price.price_czk:.2f}[/bold]")
                 else:
-                    table.add_row(hour_str, f"{price.price_eur:.2f}")
+                    table.add_row(hour_str, f"{price.price_czk:.2f}")
 
             console.print(table)
 
