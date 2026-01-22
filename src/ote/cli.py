@@ -3,6 +3,7 @@
 from datetime import date
 
 import click
+import httpx
 from rich.console import Console
 from rich.table import Table
 
@@ -11,10 +12,16 @@ from ote.db import (
     get_available_dates,
     get_connection,
     get_daily_stats,
+    get_default_db_path,
     get_prices_for_date,
     save_prices,
 )
 from ote.spot import fetch_spot_prices, get_current_price
+
+# GitHub raw URL pro databázi
+GITHUB_DB_URL = (
+    "https://raw.githubusercontent.com/tomasvaclavik-cyber/devtool/main/data/prices.db"
+)
 
 console = Console()
 
@@ -205,6 +212,51 @@ def dashboard(port: int) -> None:
         "--server.port", str(port),
         "--server.headless", "true",
     ])
+
+
+@main.command()
+@click.option("--force", "-f", is_flag=True, help="Přepsat lokální databázi bez dotazu")
+def sync(force: bool) -> None:
+    """Stáhne nejnovější databázi z GitHubu."""
+    try:
+        db_path = get_default_db_path()
+
+        # Kontrola existence lokální DB
+        if db_path.exists() and not force:
+            console.print(f"[yellow]Lokální databáze existuje: {db_path}[/yellow]")
+            if not click.confirm("Přepsat lokální databázi novější verzí z GitHubu?"):
+                console.print("[dim]Zrušeno.[/dim]")
+                return
+
+        console.print("[cyan]Stahuji databázi z GitHubu...[/cyan]")
+
+        # Stažení databáze
+        response = httpx.get(GITHUB_DB_URL, follow_redirects=True, timeout=30.0)
+        response.raise_for_status()
+
+        # Uložení
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        db_path.write_bytes(response.content)
+
+        size_kb = len(response.content) / 1024
+        console.print(f"[green]Databáze stažena ({size_kb:.1f} KB)[/green]")
+        console.print(f"[dim]Uloženo do: {db_path}[/dim]")
+
+        # Zobraz počet dnů v DB
+        conn = get_connection(db_path)
+        dates = get_available_dates(conn)
+        conn.close()
+
+        if dates:
+            console.print(f"[dim]Dostupná historie: {len(dates)} dnů[/dim]")
+            console.print(f"[dim]Od {dates[-1]} do {dates[0]}[/dim]")
+
+    except httpx.HTTPStatusError as e:
+        console.print(f"[red]Chyba při stahování: HTTP {e.response.status_code}[/red]")
+    except httpx.RequestError as e:
+        console.print(f"[red]Chyba připojení: {e}[/red]")
+    except Exception as e:
+        console.print(f"[red]Chyba: {e}[/red]")
 
 
 if __name__ == "__main__":
