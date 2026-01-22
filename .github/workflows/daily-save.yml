@@ -2,12 +2,9 @@ name: Daily OTE Save
 
 on:
   schedule:
-    # Spouštět každý den v 6:00 UTC (7:00 CET / 8:00 CEST)
-    - cron: "0 6 * * *"
+    # Spouštět každý den v 14:00 UTC (15:00 CET) - po publikaci OTE dat
+    - cron: "0 14 * * *"
   workflow_dispatch: # Umožní ruční spuštění
-
-# Spouští se pouze na main větvi (produkce)
-# Schedule workflows běží vždy na default branch
 
 jobs:
   save:
@@ -17,28 +14,37 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout kódu
+      - name: Checkout data branch
         uses: actions/checkout@v4
+        with:
+          ref: data
 
       - name: Nastavení Pythonu
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
+      - name: Checkout main for source code
+        run: |
+          git fetch origin main
+          git checkout origin/main -- src/ pyproject.toml
+
       - name: Instalace závislostí
         run: |
           python -m pip install --upgrade pip
           pip install -e .
 
-      - name: Stažení spotových cen
+      - name: Stažení spotových cen (dnes + zítra)
         env:
           OTE_DB_PATH: ${{ github.workspace }}/data/prices.db
-        run: ote save
+        run: |
+          ote save
+          ote save -d $(date -d "+1 day" +%Y-%m-%d) || echo "Tomorrow's data not yet available"
 
-      - name: Commit a push
+      - name: Commit a push do data branch
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/prices.db
           git diff --staged --quiet || git commit -m "Daily OTE data update $(date +%Y-%m-%d)"
-          git push
+          git push origin data
