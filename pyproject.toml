@@ -25,6 +25,13 @@ dashboard = [
     "pandas>=2.0.0",
     "altair>=5.0.0",
 ]
+analysis = [
+    "streamlit>=1.30.0",
+    "pandas>=2.0.0",
+    "altair>=5.0.0",
+    "scipy>=1.11.0",
+    "statsmodels>=0.14.0",
+]
 
 [project.scripts]
 ote = "ote.cli:main"
