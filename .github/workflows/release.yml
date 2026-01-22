@@ -1,0 +1,69 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout kódu
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Nastavení Pythonu
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Získání verze
+        id: version
+        run: |
+          VERSION=$(python -c "from src.ote import __version__; print(__version__)")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Verze: $VERSION"
+
+      - name: Kontrola zda tag existuje
+        id: check_tag
+        run: |
+          if git rev-parse "v${{ steps.version.outputs.version }}" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build balíčku
+        if: steps.check_tag.outputs.exists == 'false'
+        run: |
+          pip install build
+          python -m build
+
+      - name: Vytvoření Release
+        if: steps.check_tag.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: Release v${{ steps.version.outputs.version }}
+          body: |
+            ## OTE v${{ steps.version.outputs.version }}
+
+            ### Instalace
+            ```bash
+            pip install -e ".[dashboard,analysis]"
+            ```
+
+            ### Změny
+            Viz [CHANGELOG](https://github.com/${{ github.repository }}/commits/main)
+          files: |
+            dist/*
+          draft: false
+          prerelease: false
+
+      - name: Již existující verze
+        if: steps.check_tag.outputs.exists == 'true'
+        run: echo "Tag v${{ steps.version.outputs.version }} již existuje, přeskakuji release"
