@@ -18,9 +18,9 @@ from ote.db import (
 )
 from ote.spot import fetch_spot_prices, get_current_price
 
-# GitHub raw URL pro databázi
+# GitHub raw URL pro databázi (z data branch)
 GITHUB_DB_URL = (
-    "https://raw.githubusercontent.com/tomasvaclavik-cyber/devtool/main/data/prices.db"
+    "https://raw.githubusercontent.com/tomasvaclavik-cyber/devtool/data/data/prices.db"
 )
 
 console = Console()
