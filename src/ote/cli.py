@@ -125,7 +125,7 @@ def history(report_date: str | None) -> None:
             prices = get_prices_for_date(conn, dt)
             stats = get_daily_stats(conn, dt)
 
-            if not prices:
+            if not prices or not stats:
                 console.print(f"[red]Žádná data pro {dt} v databázi.[/red]")
                 conn.close()
                 return

@@ -126,7 +126,7 @@ def get_available_dates(conn: sqlite3.Connection) -> list[date]:
     return [date.fromisoformat(row["report_date"]) for row in cursor.fetchall()]
 
 
-def get_daily_stats(conn: sqlite3.Connection, report_date: date) -> dict | None:
+def get_daily_stats(conn: sqlite3.Connection, report_date: date) -> dict[str, float] | None:
     """Vrátí statistiky pro daný den."""
     init_db(conn)
 

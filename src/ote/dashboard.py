@@ -7,10 +7,10 @@ import pandas as pd
 import streamlit as st
 
 from ote.db import get_available_dates, get_connection, get_daily_stats, get_prices_for_date
-from ote.spot import fetch_spot_prices, get_current_price
+from ote.spot import SpotPrice, fetch_spot_prices, get_current_price
 
 
-def load_prices_as_df(prices: list) -> pd.DataFrame:
+def load_prices_as_df(prices: list[SpotPrice]) -> pd.DataFrame:
     """Převede seznam cen na pandas DataFrame."""
     return pd.DataFrame([
         {
@@ -99,7 +99,7 @@ def show_live_data() -> None:
         alt.Chart(df)
         .mark_area(
             line={"color": "#1f77b4"},
-            color=alt.Gradient(
+            color=alt.Gradient(  # type: ignore[no-untyped-call]
                 gradient="linear",
                 stops=[
                     alt.GradientStop(color="#1f77b4", offset=0),
@@ -148,7 +148,7 @@ def show_historical_data() -> None:
     prices = get_prices_for_date(conn, selected_date)
     stats = get_daily_stats(conn, selected_date)
 
-    if not prices:
+    if not prices or not stats:
         st.warning("Žádná data pro vybrané datum.")
         conn.close()
         return
@@ -179,7 +179,7 @@ def show_historical_data() -> None:
         alt.Chart(df)
         .mark_area(
             line={"color": "#2ca02c"},
-            color=alt.Gradient(
+            color=alt.Gradient(  # type: ignore[no-untyped-call]
                 gradient="linear",
                 stops=[
                     alt.GradientStop(color="#2ca02c", offset=0),
