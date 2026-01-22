@@ -184,5 +184,28 @@ def history(report_date: str | None) -> None:
         console.print(f"[red]Chyba: {e}[/red]")
 
 
+@main.command()
+@click.option("--port", "-p", default=8501, help="Port pro web server")
+def dashboard(port: int) -> None:
+    """Spustí webový dashboard (vyžaduje: pip install ote[dashboard])."""
+    import subprocess
+    import sys
+
+    try:
+        from ote import dashboard as dash_module  # noqa: F401
+    except ImportError:
+        console.print("[red]Dashboard není nainstalován.[/red]")
+        console.print("[dim]Nainstalujte: pip install -e '.[dashboard]'[/dim]")
+        return
+
+    console.print(f"[green]Spouštím dashboard na http://localhost:{port}[/green]")
+    subprocess.run([
+        sys.executable, "-m", "streamlit", "run",
+        dash_module.__file__,
+        "--server.port", str(port),
+        "--server.headless", "true",
+    ])
+
+
 if __name__ == "__main__":
     main()
