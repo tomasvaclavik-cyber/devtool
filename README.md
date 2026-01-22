@@ -1,7 +1,7 @@
 # OTE
 
-[![CI](https://github.com/tomasvaclavik-cyber/devtool/actions/workflows/ci.yml/badge.svg)](https://github.com/tomasvaclavik-cyber/devtool/actions/workflows/ci.yml)
-[![Daily Save](https://github.com/tomasvaclavik-cyber/devtool/actions/workflows/daily-save.yml/badge.svg)](https://github.com/tomasvaclavik-cyber/devtool/actions/workflows/daily-save.yml)
+[![CI](https://github.com/tomasvaclavik-cyber/devtool/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/tomasvaclavik-cyber/devtool/actions/workflows/ci.yml)
+[![Daily Save](https://github.com/tomasvaclavik-cyber/devtool/actions/workflows/daily-save.yml/badge.svg?branch=master)](https://github.com/tomasvaclavik-cyber/devtool/actions/workflows/daily-save.yml)
 
 CLI nástroj pro zobrazení spotových cen elektřiny z OTE (Operátor trhu s elektřinou) v CZK.
 
