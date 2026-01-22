@@ -6,7 +6,6 @@ build-backend = "hatchling.build"
 name = "devtool"
 version = "0.1.0"
 description = "CLI nástroj pro automatizaci vývoje"
-readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "click>=8.1.0",
