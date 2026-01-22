@@ -15,6 +15,11 @@ source .venv/bin/activate
 pip install -e .
 ```
 
+Pro webový dashboard:
+```bash
+pip install -e ".[dashboard]"
+```
+
 ## Použití
 
 ### Aktuální ceny
@@ -38,6 +43,19 @@ ote save -d 2026-01-21  # uloží konkrétní den
 ote history           # přehled všech uložených dnů
 ote history -d 2026-01-22  # detail konkrétního dne
 ```
+
+### Web Dashboard
+
+```bash
+ote dashboard         # spustí na http://localhost:8501
+ote dashboard -p 8080 # vlastní port
+```
+
+Funkce dashboardu:
+- Interaktivní grafy cen během dne
+- Přepínání mezi živými daty (API) a historií (databáze)
+- Statistiky (min, max, průměr)
+- Porovnání posledních dnů
 
 ## Automatické stahování dat
 
