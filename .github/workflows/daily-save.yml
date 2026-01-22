@@ -6,6 +6,9 @@ on:
     - cron: "0 6 * * *"
   workflow_dispatch: # Umožní ruční spuštění
 
+# Spouští se pouze na main větvi (produkce)
+# Schedule workflows běží vždy na default branch
+
 jobs:
   save:
     runs-on: ubuntu-latest
