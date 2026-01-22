@@ -124,19 +124,9 @@ def show_live_data() -> None:
 
     chart = (
         alt.Chart(df)
-        .mark_area(
-            line={"color": "#1f77b4"},
-            color=alt.Gradient(
-                gradient="linear",
-                stops=[
-                    alt.GradientStop(color="#1f77b4", offset=0),
-                    alt.GradientStop(color="#a8d5ff", offset=1),
-                ],
-                x1=1, x2=1, y1=1, y2=0,
-            ),
-        )
+        .mark_bar(color="#1f77b4")
         .encode(
-            x=alt.X("Čas:T", title="Čas", axis=alt.Axis(format="%H:%M")),
+            x=alt.X("Hodina:N", title="Čas", sort=None),
             y=alt.Y("Cena (CZK/MWh):Q", title="Cena (CZK/MWh)"),
             tooltip=["Hodina", "Cena (CZK/MWh)", "Cena (EUR/MWh)"],
         )
@@ -205,19 +195,9 @@ def show_historical_data() -> None:
 
     chart = (
         alt.Chart(df)
-        .mark_area(
-            line={"color": "#2ca02c"},
-            color=alt.Gradient(
-                gradient="linear",
-                stops=[
-                    alt.GradientStop(color="#2ca02c", offset=0),
-                    alt.GradientStop(color="#b5e7b5", offset=1),
-                ],
-                x1=1, x2=1, y1=1, y2=0,
-            ),
-        )
+        .mark_bar(color="#2ca02c")
         .encode(
-            x=alt.X("Čas:T", title="Čas", axis=alt.Axis(format="%H:%M")),
+            x=alt.X("Hodina:N", title="Čas", sort=None),
             y=alt.Y("Cena (CZK/MWh):Q", title="Cena (CZK/MWh)"),
             tooltip=["Hodina", "Cena (CZK/MWh)", "Cena (EUR/MWh)"],
         )
@@ -338,25 +318,17 @@ def show_analysis_tab() -> None:
         ])
 
         # Graf hodinových vzorců
-        base = alt.Chart(pattern_df).encode(
-            x=alt.X("Hodina:O", title="Hodina"),
+        pattern_chart = (
+            alt.Chart(pattern_df)
+            .mark_bar(color="#1f77b4")
+            .encode(
+                x=alt.X("Hodina:O", title="Hodina"),
+                y=alt.Y("Průměr (CZK/MWh):Q", title="Cena (CZK/MWh)"),
+                tooltip=["Hodina", "Průměr (CZK/MWh)", "Min", "Max"],
+            )
+            .properties(height=300)
+            .interactive()
         )
-
-        area = base.mark_area(opacity=0.3, color="#1f77b4").encode(
-            y=alt.Y("Min:Q", title="Cena (CZK/MWh)"),
-            y2="Max:Q",
-        )
-
-        line = base.mark_line(color="#1f77b4", strokeWidth=2).encode(
-            y=alt.Y("Průměr (CZK/MWh):Q"),
-        )
-
-        points = base.mark_circle(color="#1f77b4", size=50).encode(
-            y=alt.Y("Průměr (CZK/MWh):Q"),
-            tooltip=["Hodina", "Průměr (CZK/MWh)", "Min", "Max"],
-        )
-
-        pattern_chart = (area + line + points).properties(height=300).interactive()
         st.altair_chart(pattern_chart, use_container_width=True)
 
     # Nejlevnější a nejdražší hodiny
@@ -467,19 +439,9 @@ def show_forecast_tab() -> None:
         # Graf
         chart = (
             alt.Chart(df)
-            .mark_area(
-                line={"color": "#ff7f0e"},
-                color=alt.Gradient(
-                    gradient="linear",
-                    stops=[
-                        alt.GradientStop(color="#ff7f0e", offset=0),
-                        alt.GradientStop(color="#ffd699", offset=1),
-                    ],
-                    x1=1, x2=1, y1=1, y2=0,
-                ),
-            )
+            .mark_bar(color="#ff7f0e")
             .encode(
-                x=alt.X("Čas:T", title="Čas", axis=alt.Axis(format="%H:%M")),
+                x=alt.X("Hodina:N", title="Čas", sort=None),
                 y=alt.Y("Cena (CZK/MWh):Q", title="Cena (CZK/MWh)"),
                 tooltip=["Hodina", "Cena (CZK/MWh)", "Cena (EUR/MWh)"],
             )
@@ -553,21 +515,17 @@ def show_forecast_tab() -> None:
                 st.metric("Predikovaný průměr", f"{forecast_df[pred_col].mean():,.0f} CZK/MWh")
 
             # Graf s confidence intervaly
-            base = alt.Chart(forecast_df).encode(
-                x=alt.X("Čas:T", title="Čas", axis=alt.Axis(format="%H:%M")),
+            forecast_chart = (
+                alt.Chart(forecast_df)
+                .mark_bar(color="#9467bd")
+                .encode(
+                    x=alt.X("Hodina:N", title="Čas", sort=None),
+                    y=alt.Y("Predikce (CZK/MWh):Q", title="Cena (CZK/MWh)"),
+                    tooltip=["Hodina", "Predikce (CZK/MWh)", "Min", "Max"],
+                )
+                .properties(height=250)
+                .interactive()
             )
-
-            band = base.mark_area(opacity=0.3, color="#9467bd").encode(
-                y=alt.Y("Min:Q", title="Cena (CZK/MWh)"),
-                y2="Max:Q",
-            )
-
-            line = base.mark_line(color="#9467bd", strokeWidth=2).encode(
-                y=alt.Y("Predikce (CZK/MWh):Q"),
-                tooltip=["Hodina", "Predikce (CZK/MWh)", "Min", "Max"],
-            )
-
-            forecast_chart = (band + line).properties(height=250).interactive()
             st.altair_chart(forecast_chart, use_container_width=True)
 
     conn.close()
