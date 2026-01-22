@@ -99,8 +99,7 @@ def show_live_data() -> None:
         alt.Chart(df)
         .mark_area(
             line={"color": "#1f77b4"},
-            color=alt.Gradient(  # type: ignore[no-untyped-call]
-                gradient="linear",
+            color=alt.Gradient(                gradient="linear",
                 stops=[
                     alt.GradientStop(color="#1f77b4", offset=0),
                     alt.GradientStop(color="#a8d5ff", offset=1),
@@ -179,8 +178,7 @@ def show_historical_data() -> None:
         alt.Chart(df)
         .mark_area(
             line={"color": "#2ca02c"},
-            color=alt.Gradient(  # type: ignore[no-untyped-call]
-                gradient="linear",
+            color=alt.Gradient(                gradient="linear",
                 stops=[
                     alt.GradientStop(color="#2ca02c", offset=0),
                     alt.GradientStop(color="#b5e7b5", offset=1),
