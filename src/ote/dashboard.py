@@ -134,13 +134,13 @@ def show_live_data() -> None:
         .interactive()
     )
 
-    st.altair_chart(chart, use_container_width=True)
+    st.altair_chart(chart, width="stretch")
 
     # Tabulka
     with st.expander("Zobrazit tabulku"):
         st.dataframe(
             df[["Hodina", "Cena (CZK/MWh)", "Cena (EUR/MWh)"]],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -205,7 +205,7 @@ def show_historical_data() -> None:
         .interactive()
     )
 
-    st.altair_chart(chart, use_container_width=True)
+    st.altair_chart(chart, width="stretch")
 
     # Porovnání dnů
     if len(dates) > 1:
@@ -237,7 +237,7 @@ def show_historical_data() -> None:
                 .properties(height=300)
             )
 
-            st.altair_chart(compare_chart, use_container_width=True)
+            st.altair_chart(compare_chart, width="stretch")
 
     conn.close()
 
@@ -335,7 +335,7 @@ def show_analysis_tab() -> None:
             .properties(height=300)
             .interactive()
         )
-        st.altair_chart(pattern_chart, use_container_width=True)
+        st.altair_chart(pattern_chart, width="stretch")
 
     # Nejlevnější a nejdražší hodiny
     col1, col2 = st.columns(2)
@@ -381,7 +381,7 @@ def show_analysis_tab() -> None:
                 .properties(height=250)
             )
 
-            st.altair_chart(heatmap, use_container_width=True)
+            st.altair_chart(heatmap, width="stretch")
     else:
         st.info(
             f"Týdenní heatmapa vyžaduje alespoň 14 dnů dat. "
@@ -445,7 +445,7 @@ def show_analysis_tab() -> None:
             .properties(height=200, title="Typické hodiny s negativními cenami")
         )
 
-        st.altair_chart(dist_chart, use_container_width=True)
+        st.altair_chart(dist_chart, width="stretch")
 
     # Historie negativních cen
     neg_hours = get_negative_price_hours_list(conn, days_back=30)
@@ -459,7 +459,7 @@ def show_analysis_tab() -> None:
                 }
                 for h in neg_hours
             ])
-            st.dataframe(neg_df, use_container_width=True, hide_index=True)
+            st.dataframe(neg_df, width="stretch", hide_index=True)
     else:
         st.info("Za posledních 30 dní nebyly zaznamenány žádné negativní ceny.")
 
@@ -517,7 +517,7 @@ def show_analysis_tab() -> None:
                 {"Percentil": "75%", "Cena (CZK/MWh)": f"{p75:,.0f}"},
                 {"Percentil": "90%", "Cena (CZK/MWh)": f"{p90_val:,.0f}"},
             ])
-            st.dataframe(perc_df, use_container_width=True, hide_index=True)
+            st.dataframe(perc_df, width="stretch", hide_index=True)
 
     # Histogram distribuce cen
     bins = distribution.bins
@@ -540,7 +540,7 @@ def show_analysis_tab() -> None:
             .properties(height=250, title="Distribuce cen (histogram)")
         )
 
-        st.altair_chart(hist_chart, use_container_width=True)
+        st.altair_chart(hist_chart, width="stretch")
 
     # Graf trendu s klouzavými průměry
     if days_count >= 14:
@@ -592,7 +592,7 @@ def show_analysis_tab() -> None:
                 .interactive()
             )
 
-            st.altair_chart(trend_chart, use_container_width=True)
+            st.altair_chart(trend_chart, width="stretch")
 
     conn.close()
 
@@ -661,13 +661,13 @@ def show_forecast_tab() -> None:
             .interactive()
         )
 
-        st.altair_chart(chart, use_container_width=True)
+        st.altair_chart(chart, width="stretch")
 
         # Tabulka
         with st.expander("Zobrazit tabulku"):
             st.dataframe(
                 df[["Hodina", "Cena (CZK/MWh)", "Cena (EUR/MWh)"]],
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
     else:
@@ -738,7 +738,7 @@ def show_forecast_tab() -> None:
                 .properties(height=250)
                 .interactive()
             )
-            st.altair_chart(forecast_chart, use_container_width=True)
+            st.altair_chart(forecast_chart, width="stretch")
 
     conn.close()
 
