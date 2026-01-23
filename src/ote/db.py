@@ -12,11 +12,21 @@ from ote.spot import SpotPrice
 def get_default_db_path() -> Path:
     """Vrátí výchozí cestu k databázi.
 
-    Používá OTE_DB_PATH env proměnnou, nebo ~/.ote/prices.db
+    Pořadí:
+    1. OTE_DB_PATH env proměnná
+    2. data/prices.db v adresáři projektu (pro Streamlit Cloud)
+    3. ~/.ote/prices.db (lokální vývoj)
     """
     env_path = os.environ.get("OTE_DB_PATH")
     if env_path:
         return Path(env_path)
+
+    # Pro Streamlit Cloud - hledej data/prices.db relativně k balíčku
+    package_dir = Path(__file__).parent.parent.parent
+    cloud_db = package_dir / "data" / "prices.db"
+    if cloud_db.exists():
+        return cloud_db
+
     return Path.home() / ".ote" / "prices.db"
 
 
