@@ -1,10 +1,12 @@
 """Streamlit dashboard pro vizualizaci spotových cen."""
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import altair as alt
 import pandas as pd
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 
 from ote.db import (
     get_available_dates,
@@ -14,6 +16,9 @@ from ote.db import (
     get_prices_for_date,
 )
 from ote.spot import SpotPrice, fetch_spot_prices, get_current_price
+
+# Časové pásmo pro Českou republiku
+PRAGUE_TZ = ZoneInfo("Europe/Prague")
 
 
 def load_prices_as_df(prices: list[SpotPrice]) -> pd.DataFrame:
@@ -37,7 +42,15 @@ def main() -> None:
         layout="wide",
     )
 
+    # Auto-refresh každých 15 minut (900 sekund = 900000 ms)
+    # Refresh probíhá v :00, :15, :30, :45
+    st_autorefresh(interval=15 * 60 * 1000, key="price_refresh")
+
     st.title("⚡ OTE Spotové ceny elektřiny")
+
+    # Zobraz čas posledního refreshe (české časové pásmo)
+    now = datetime.now(PRAGUE_TZ)
+    st.caption(f"Poslední aktualizace: {now.strftime('%H:%M:%S')} (CET/CEST)")
 
     # Hlavní navigace pomocí tabů
     tab_prices, tab_analysis, tab_profiles, tab_forecast, tab_weather = st.tabs([
