@@ -1,10 +1,11 @@
 """Streamlit dashboard pro vizualizaci spotových cen."""
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 import altair as alt
 import pandas as pd
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 
 from ote.db import (
     get_available_dates,
@@ -37,7 +38,15 @@ def main() -> None:
         layout="wide",
     )
 
+    # Auto-refresh každých 15 minut (900 sekund = 900000 ms)
+    # Refresh probíhá v :00, :15, :30, :45
+    st_autorefresh(interval=15 * 60 * 1000, key="price_refresh")
+
     st.title("⚡ OTE Spotové ceny elektřiny")
+
+    # Zobraz čas posledního refreshe
+    now = datetime.now()
+    st.caption(f"Poslední aktualizace: {now.strftime('%H:%M:%S')}")
 
     # Hlavní navigace pomocí tabů
     tab_prices, tab_analysis, tab_profiles, tab_forecast, tab_weather = st.tabs([
