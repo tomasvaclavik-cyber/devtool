@@ -14,18 +14,17 @@ def get_default_db_path() -> Path:
 
     Pořadí:
     1. OTE_DB_PATH env proměnná
-    2. data/prices.db v adresáři projektu (pro Streamlit Cloud)
+    2. data/prices.db v pracovním adresáři (pro Streamlit Cloud)
     3. ~/.ote/prices.db (lokální vývoj)
     """
     env_path = os.environ.get("OTE_DB_PATH")
     if env_path:
         return Path(env_path)
 
-    # Pro Streamlit Cloud - hledej data/prices.db relativně k balíčku
-    package_dir = Path(__file__).parent.parent.parent
-    cloud_db = package_dir / "data" / "prices.db"
-    if cloud_db.exists():
-        return cloud_db
+    # Pro Streamlit Cloud - hledej data/prices.db v pracovním adresáři
+    cwd_db = Path.cwd() / "data" / "prices.db"
+    if cwd_db.exists():
+        return cwd_db
 
     return Path.home() / ".ote" / "prices.db"
 

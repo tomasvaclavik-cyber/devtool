@@ -260,3 +260,94 @@ def get_forecast_for_days(
             result[target_date] = forecasts
 
     return result
+
+
+def forecast_weather_enhanced(
+    conn: sqlite3.Connection,
+    target_date: date,
+) -> list[PriceForecast]:
+    """Vytvoří predikci s korekcí podle počasí.
+
+    Kombinuje statistickou predikci s faktory počasí:
+    - Slunečno -> nižší ceny (fotovoltaika)
+    - Větrno -> nižší ceny (větrné elektrárny)
+    - Zataženo + bezvětří -> vyšší ceny
+    - Extrémní teploty -> vyšší ceny (topení/chlazení)
+
+    Args:
+        conn: Databázové připojení.
+        target_date: Cílové datum pro predikci.
+
+    Returns:
+        Seznam predikcí pro každých 15 minut.
+    """
+    from ote.weather import fetch_weather_forecast
+    from ote.weather import forecast_weather_enhanced as weather_forecast
+
+    # Získej předpověď počasí
+    try:
+        weather_forecasts = fetch_weather_forecast(days_ahead=7)
+        weather = next((f for f in weather_forecasts if f.date == target_date), None)
+    except RuntimeError:
+        weather = None
+
+    # Získej predikce s korekcí podle počasí
+    predictions = weather_forecast(conn, target_date, weather)
+
+    forecasts: list[PriceForecast] = []
+    year = target_date.year
+    month = target_date.month
+    day = target_date.day
+
+    for hour, predicted_price, conf_low, conf_high in predictions:
+        # Vytvoř predikci pro každých 15 minut v hodině
+        for quarter in range(4):
+            minute = quarter * 15
+            time_from = datetime(year, month, day, hour, minute)
+            time_to = datetime(year, month, day, hour, minute + 14, 59)
+
+            method = "počasí-enhanced" if weather else "statistická"
+
+            forecasts.append(
+                PriceForecast(
+                    time_from=time_from,
+                    time_to=time_to,
+                    price_czk=predicted_price,
+                    confidence_low=conf_low,
+                    confidence_high=conf_high,
+                    method=method,
+                )
+            )
+
+    return forecasts
+
+
+def get_forecast_for_days_with_weather(
+    conn: sqlite3.Connection,
+    days_ahead: int = 7,
+) -> dict[date, list[PriceForecast]]:
+    """Získá predikce s počasím pro více dnů dopředu.
+
+    Args:
+        conn: Databázové připojení.
+        days_ahead: Počet dnů dopředu (výchozí 7).
+
+    Returns:
+        Slovník {datum: seznam predikcí}.
+    """
+    sufficiency = get_data_sufficiency(conn)
+
+    if not sufficiency.can_show_hourly_patterns:
+        return {}
+
+    result = {}
+    today = date.today()
+
+    for day_offset in range(2, days_ahead + 1):  # D+2 až D+days_ahead
+        target_date = today + timedelta(days=day_offset)
+        forecasts = forecast_weather_enhanced(conn, target_date)
+
+        if forecasts:
+            result[target_date] = forecasts
+
+    return result
