@@ -2,8 +2,12 @@
 
 from dataclasses import dataclass
 from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 import httpx
+
+# Časové pásmo pro Českou republiku (OTE data jsou v tomto pásmu)
+PRAGUE_TZ = ZoneInfo("Europe/Prague")
 
 OTE_BASE_URL = "https://www.ote-cr.cz"
 # Anglická verze API vrací title u dataLine, což umožňuje rozlišit cenu od objemu
@@ -103,9 +107,15 @@ def fetch_spot_prices(report_date: date | None = None) -> tuple[list[SpotPrice],
 
 
 def get_current_price(prices: list[SpotPrice]) -> SpotPrice | None:
-    """Najde aktuální cenu podle času."""
-    now = datetime.now()
+    """Najde aktuální cenu podle času.
+
+    Používá české časové pásmo (Europe/Prague), protože OTE data
+    jsou v tomto pásmu.
+    """
+    now = datetime.now(PRAGUE_TZ)
+    # Porovnáváme pouze čas bez timezone info (OTE data nemají timezone)
+    now_naive = now.replace(tzinfo=None)
     for price in prices:
-        if price.time_from <= now <= price.time_to:
+        if price.time_from <= now_naive <= price.time_to:
             return price
     return None
