@@ -40,10 +40,12 @@ def main() -> None:
     st.title("⚡ OTE Spotové ceny elektřiny")
 
     # Hlavní navigace pomocí tabů
-    tab_prices, tab_analysis, tab_forecast = st.tabs([
+    tab_prices, tab_analysis, tab_profiles, tab_forecast, tab_weather = st.tabs([
         "Aktuální ceny",
         "Analýza",
+        "Profily & Riziko",
         "Predikce",
+        "Počasí",
     ])
 
     with tab_prices:
@@ -52,8 +54,14 @@ def main() -> None:
     with tab_analysis:
         show_analysis_tab()
 
+    with tab_profiles:
+        show_profiles_tab()
+
     with tab_forecast:
         show_forecast_tab()
+
+    with tab_weather:
+        show_weather_tab()
 
 
 def show_prices_tab() -> None:
@@ -739,6 +747,452 @@ def show_forecast_tab() -> None:
                 .interactive()
             )
             st.altair_chart(forecast_chart, width="stretch")
+
+    conn.close()
+
+
+def show_profiles_tab() -> None:
+    """Zobrazí tab s profily spotřeby a rizikem."""
+    conn = get_connection()
+    days_count = get_data_days_count(conn)
+
+    if days_count < 7:
+        st.warning(
+            f"Pro analýzu profilů je potřeba alespoň 7 dnů dat. "
+            f"Aktuálně máte {days_count} dnů."
+        )
+        conn.close()
+        return
+
+    from ote.analysis import (
+        get_all_profiles_comparison,
+        get_current_benchmark,
+        get_peak_analysis,
+        get_peak_probability_by_hour,
+        get_volatility_metrics,
+        predict_peaks_tomorrow,
+    )
+
+    # --- Benchmark sekce ---
+    st.subheader("Aktuální cenový benchmark")
+
+    try:
+        prices, _ = fetch_spot_prices(date.today())
+        current = get_current_price(prices)
+
+        if current:
+            benchmark = get_current_benchmark(conn, current.price_czk)
+
+            col1, col2, col3, col4 = st.columns(4)
+
+            with col1:
+                st.metric("Aktuální cena", f"{benchmark.current_price:,.0f} CZK/MWh")
+
+            with col2:
+                st.metric("Průměr 7d", f"{benchmark.avg_7d:,.0f} CZK/MWh")
+
+            with col3:
+                st.metric("Percentil", f"{benchmark.percentile_rank}.")
+
+            with col4:
+                # Barevná klasifikace
+                color_map = {
+                    "velmi levná": "#28a745",
+                    "levná": "#7cb342",
+                    "normální": "#ffc107",
+                    "drahá": "#ff9800",
+                    "velmi drahá": "#dc3545",
+                }
+                color = color_map.get(benchmark.classification, "#6c757d")
+                st.markdown(
+                    f"<div style='padding: 10px; background-color: {color}; "
+                    f"border-radius: 5px; text-align: center; color: white; "
+                    f"font-weight: bold;'>{benchmark.classification.upper()}</div>",
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.info("Aktuální cena není k dispozici.")
+    except Exception:
+        st.info("Nelze načíst aktuální cenu z API.")
+
+    st.markdown("---")
+
+    # --- Profily spotřeby ---
+    st.subheader("Spotřebitelské profily")
+
+    profiles = get_all_profiles_comparison(conn)
+
+    if profiles:
+        # Tabulka profilů
+        profile_data = []
+        for p in profiles:
+            profile_data.append({
+                "Profil": p.name,
+                "Popis": p.description,
+                "Cena (CZK/MWh)": p.avg_price_czk,
+                "Úspora (%)": p.savings_vs_flat_pct,
+                "Nejlepší den": p.best_day,
+            })
+
+        profile_df = pd.DataFrame(profile_data)
+
+        # Bar chart
+        chart = (
+            alt.Chart(profile_df)
+            .mark_bar()
+            .encode(
+                x=alt.X("Profil:N", sort=None),
+                y=alt.Y("Cena (CZK/MWh):Q"),
+                color=alt.condition(
+                    alt.datum["Úspora (%)"] > 0,
+                    alt.value("#28a745"),
+                    alt.value("#dc3545"),
+                ),
+                tooltip=["Profil", "Popis", "Cena (CZK/MWh)", "Úspora (%)"],
+            )
+            .properties(height=300, title="Průměrná cena podle profilu")
+        )
+
+        st.altair_chart(chart, use_container_width=True)
+
+        # Tabulka
+        st.dataframe(profile_df, use_container_width=True, hide_index=True)
+
+        # Doporučení
+        best_profile = profiles[0]
+        st.success(
+            f"**Doporučený profil:** {best_profile.name} "
+            f"(úspora {best_profile.savings_vs_flat_pct:+.1f}% oproti flat tarifu)"
+        )
+    else:
+        st.info("Nedostatek dat pro analýzu profilů.")
+
+    st.markdown("---")
+
+    # --- Volatilita a riziko ---
+    st.subheader("Volatilita a riziko")
+
+    metrics = get_volatility_metrics(conn)
+
+    if metrics.volatility_trend != "nedostatek dat":
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            st.metric(
+                "Denní volatilita",
+                f"{metrics.daily_volatility:,.0f} CZK",
+                help="Směrodatná odchylka denních průměrů",
+            )
+
+        with col2:
+            st.metric(
+                "Průměrné denní rozpětí",
+                f"{metrics.avg_daily_swing:,.0f} CZK",
+                help="Průměrný rozdíl max-min za den",
+            )
+
+        with col3:
+            trend_icons = {
+                "rostoucí": "📈",
+                "klesající": "📉",
+                "stabilní": "➡️",
+            }
+            icon = trend_icons.get(metrics.volatility_trend, "")
+            st.metric("Trend volatility", f"{icon} {metrics.volatility_trend}")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.metric(
+                "VaR 95%",
+                f"{metrics.var_95:,.0f} CZK/MWh",
+                help="95% cen je pod touto hodnotou",
+            )
+
+        with col2:
+            st.metric(
+                "Max denní rozpětí",
+                f"{metrics.max_daily_swing:,.0f} CZK/MWh",
+            )
+
+    st.markdown("---")
+
+    # --- Špičky ---
+    st.subheader("Cenové špičky")
+
+    peak_analysis = get_peak_analysis(conn)
+
+    if peak_analysis.total_peaks_30d > 0:
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            st.metric("Hranice špičky (P90)", f"{peak_analysis.threshold_p90:,.0f} CZK")
+
+        with col2:
+            st.metric("Špičky za 30 dnů", f"{peak_analysis.total_peaks_30d}")
+
+        with col3:
+            risky_str = ", ".join(f"{h}:00" for h in peak_analysis.most_risky_hours[:3])
+            st.metric("Nejrizikovější hodiny", risky_str)
+
+        # Heatmapa pravděpodobnosti špiček
+        probs = get_peak_probability_by_hour(conn)
+
+        prob_data = [{"Hodina": h, "Pravděpodobnost": p * 100} for h, p in probs.items()]
+        prob_df = pd.DataFrame(prob_data)
+
+        chart = (
+            alt.Chart(prob_df)
+            .mark_bar()
+            .encode(
+                x=alt.X("Hodina:O"),
+                y=alt.Y("Pravděpodobnost:Q", title="Pravděpodobnost (%)"),
+                color=alt.Color(
+                    "Pravděpodobnost:Q",
+                    scale=alt.Scale(scheme="redyellowgreen", reverse=True),
+                ),
+                tooltip=["Hodina", "Pravděpodobnost"],
+            )
+            .properties(height=250, title="Pravděpodobnost cenové špičky podle hodiny")
+        )
+
+        st.altair_chart(chart, use_container_width=True)
+
+        # Predikce pro zítřek
+        st.subheader("Predikce špiček pro zítřek")
+
+        predictions = predict_peaks_tomorrow(conn)
+        risky = [p for p in predictions if p.probability >= 0.2]
+
+        if risky:
+            pred_data = [
+                {
+                    "Hodina": f"{p.hour:02d}:00",
+                    "Pravděpodobnost (%)": p.probability * 100,
+                    "Očekávaná cena": p.expected_price,
+                    "Riziko": p.risk_level,
+                }
+                for p in sorted(risky, key=lambda x: x.probability, reverse=True)
+            ]
+            pred_df = pd.DataFrame(pred_data)
+            st.dataframe(pred_df, use_container_width=True, hide_index=True)
+        else:
+            st.success("Zítra se neočekávají výrazné cenové špičky.")
+
+    else:
+        st.info("Žádné cenové špičky za posledních 30 dnů.")
+
+    conn.close()
+
+
+def show_weather_tab() -> None:
+    """Zobrazí tab s počasím a jeho vlivem na ceny."""
+    st.subheader("Počasí a ceny elektřiny")
+
+    try:
+        from ote.weather import fetch_weather_forecast, get_weather_price_correlation
+    except ImportError:
+        st.error("Modul počasí není dostupný.")
+        return
+
+    # Předpověď počasí
+    st.subheader("Předpověď počasí (Praha)")
+
+    try:
+        with st.spinner("Načítám předpověď počasí..."):
+            weather_forecasts = fetch_weather_forecast(days_ahead=7)
+
+        if weather_forecasts:
+            weather_data = []
+            for f in weather_forecasts:
+                impact = {
+                    "sunny": "↓ nižší",
+                    "windy": "↓ nižší",
+                    "cloudy": "↑ vyšší",
+                    "mixed": "~ běžné",
+                }.get(f.weather_type, "?")
+
+                weather_data.append({
+                    "Datum": f.date,
+                    "Typ": f.weather_type,
+                    "Teplota (°C)": f.avg_temperature,
+                    "Oblačnost (%)": f.avg_cloud_cover,
+                    "Vítr (m/s)": f.avg_wind_speed,
+                    "Vliv na ceny": impact,
+                })
+
+            weather_df = pd.DataFrame(weather_data)
+
+            # Graf teploty a oblačnosti
+            col1, col2 = st.columns(2)
+
+            with col1:
+                temp_chart = (
+                    alt.Chart(weather_df)
+                    .mark_line(point=True, color="#ff7f0e")
+                    .encode(
+                        x=alt.X("Datum:T", title="Datum"),
+                        y=alt.Y("Teplota (°C):Q"),
+                        tooltip=["Datum", "Teplota (°C)"],
+                    )
+                    .properties(height=200, title="Předpověď teploty")
+                )
+                st.altair_chart(temp_chart, use_container_width=True)
+
+            with col2:
+                cloud_chart = (
+                    alt.Chart(weather_df)
+                    .mark_bar(color="#1f77b4")
+                    .encode(
+                        x=alt.X("Datum:T", title="Datum"),
+                        y=alt.Y("Oblačnost (%):Q"),
+                        tooltip=["Datum", "Oblačnost (%)", "Typ"],
+                    )
+                    .properties(height=200, title="Předpověď oblačnosti")
+                )
+                st.altair_chart(cloud_chart, use_container_width=True)
+
+            # Tabulka
+            st.dataframe(weather_df, use_container_width=True, hide_index=True)
+
+        else:
+            st.warning("Nepodařilo se načíst předpověď počasí.")
+
+    except Exception as e:
+        st.error(f"Chyba při načítání počasí: {e}")
+
+    st.markdown("---")
+
+    # Korelace
+    st.subheader("Korelace počasí a cen")
+
+    conn = get_connection()
+    days_count = get_data_days_count(conn)
+
+    if days_count >= 14:
+        try:
+            with st.spinner("Analyzuji korelaci..."):
+                correlation = get_weather_price_correlation(conn, days_back=30)
+
+            if correlation:
+                col1, col2, col3, col4 = st.columns(4)
+
+                def corr_color(c: float) -> str:
+                    if c > 0.3:
+                        return "🔴"
+                    elif c < -0.3:
+                        return "🟢"
+                    else:
+                        return "🟡"
+
+                with col1:
+                    st.metric(
+                        "Teplota",
+                        f"{correlation.temperature_correlation:+.2f}",
+                        help="Kladná = vyšší teplota = vyšší cena",
+                    )
+
+                with col2:
+                    st.metric(
+                        "Oblačnost",
+                        f"{correlation.cloud_cover_correlation:+.2f}",
+                        help="Kladná = více mraků = vyšší cena",
+                    )
+
+                with col3:
+                    st.metric(
+                        "Sluneční záření",
+                        f"{correlation.solar_radiation_correlation:+.2f}",
+                        help="Záporná = více slunce = nižší cena",
+                    )
+
+                with col4:
+                    st.metric(
+                        "Rychlost větru",
+                        f"{correlation.wind_speed_correlation:+.2f}",
+                        help="Záporná = více větru = nižší cena",
+                    )
+
+                st.info(
+                    f"**Nejsilnější faktor:** {correlation.strongest_factor} "
+                    f"(R² = {correlation.r_squared:.3f})"
+                )
+
+                # Interpretace
+                st.markdown("""
+                **Interpretace korelací:**
+                - **Sluneční záření** (záporná korelace): Více slunce = více FVE = nižší ceny
+                - **Rychlost větru** (záporná korelace): Více větru = více větrné energie
+                - **Oblačnost** (kladná korelace): Zataženo = méně FVE = vyšší ceny
+                - **Teplota**: Extrémní teploty = vyšší spotřeba = vyšší ceny
+                """)
+
+            else:
+                st.warning("Nepodařilo se vypočítat korelaci (nedostatek historických dat).")
+
+        except Exception as e:
+            st.warning(f"Korelační analýza není dostupná: {e}")
+
+    else:
+        st.info(
+            f"Pro korelační analýzu je potřeba alespoň 14 dnů dat. "
+            f"Aktuálně máte {days_count} dnů."
+        )
+
+    conn.close()
+
+    st.markdown("---")
+
+    # Weather-enhanced predikce
+    st.subheader("Predikce s počasím")
+
+    conn = get_connection()
+    days_count = get_data_days_count(conn)
+
+    if days_count >= 7:
+        from ote.forecast import get_forecast_for_days_with_weather
+
+        try:
+            with st.spinner("Vytvářím predikci s počasím..."):
+                price_forecasts = get_forecast_for_days_with_weather(conn, days_ahead=5)
+
+            if price_forecasts:
+                # Souhrn pro každý den
+                summary_data = []
+                for dt, day_forecasts in sorted(price_forecasts.items()):
+                    prices = [f.price_czk for f in day_forecasts]
+                    summary_data.append({
+                        "Datum": dt,
+                        "Min": min(prices),
+                        "Max": max(prices),
+                        "Průměr": sum(prices) / len(prices),
+                    })
+
+                summary_df = pd.DataFrame(summary_data)
+
+                chart = (
+                    alt.Chart(summary_df)
+                    .mark_bar(color="#9467bd")
+                    .encode(
+                        x=alt.X("Datum:T", title="Datum"),
+                        y=alt.Y("Průměr:Q", title="Průměrná cena (CZK/MWh)"),
+                        tooltip=["Datum", "Min", "Max", "Průměr"],
+                    )
+                    .properties(height=250, title="Počasí-enhanced predikce")
+                )
+
+                st.altair_chart(chart, use_container_width=True)
+
+                st.dataframe(summary_df, use_container_width=True, hide_index=True)
+
+            else:
+                st.info("Nepodařilo se vytvořit predikci.")
+
+        except Exception as e:
+            st.warning(f"Predikce s počasím není dostupná: {e}")
+
+    else:
+        st.info(f"Pro predikci je potřeba alespoň 7 dnů dat. Aktuálně máte {days_count}.")
 
     conn.close()
 
