@@ -15,13 +15,7 @@ from ote.db import (
     get_data_days_count,
     get_prices_for_date,
 )
-from ote.spot import (
-    PRAGUE_TZ as SPOT_PRAGUE_TZ,
-    SpotPrice,
-    fetch_spot_prices,
-    get_current_price,
-    get_current_price_debug,
-)
+from ote.spot import SpotPrice, fetch_spot_prices, get_current_price
 
 # Časové pásmo pro Českou republiku
 PRAGUE_TZ = ZoneInfo("Europe/Prague")
@@ -126,18 +120,14 @@ def show_live_data() -> None:
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        # Debug: ukáž čas použitý pro vyhledání aktuální ceny
-        current_debug, debug_info = get_current_price_debug(prices)
-        if current_debug:
+        if current:
             st.metric(
                 "Aktuální cena",
-                f"{current_debug.price_czk:,.0f} CZK/MWh",
-                help=f"{current_debug.time_from:%H:%M} - {current_debug.time_to:%H:%M}",
+                f"{current.price_czk:,.0f} CZK/MWh",
+                help=f"{current.time_from:%H:%M} - {current.time_to:%H:%M}",
             )
         else:
             st.metric("Aktuální cena", "N/A")
-        # Debug info - zobraz přesný čas použitý pro lookup
-        st.caption(f"🐛 {debug_info}")
 
     with col2:
         st.metric("Minimum", f"{df['Cena (CZK/MWh)'].min():,.0f} CZK/MWh")

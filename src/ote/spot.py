@@ -119,18 +119,3 @@ def get_current_price(prices: list[SpotPrice]) -> SpotPrice | None:
         if price.time_from <= now_naive <= price.time_to:
             return price
     return None
-
-
-def get_current_price_debug(prices: list[SpotPrice]) -> tuple[SpotPrice | None, str]:
-    """Najde aktuální cenu s debug informacemi.
-
-    Returns:
-        Tuple (aktuální cena nebo None, debug string s použitým časem)
-    """
-    now = datetime.now(PRAGUE_TZ)
-    now_naive = now.replace(tzinfo=None)
-    debug_info = f"now={now.isoformat()}, naive={now_naive.isoformat()}"
-    for price in prices:
-        if price.time_from <= now_naive <= price.time_to:
-            return price, debug_info
-    return None, debug_info
