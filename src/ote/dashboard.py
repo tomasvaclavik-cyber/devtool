@@ -16,7 +16,6 @@ from ote.db import (
     get_prices_for_date,
 )
 from ote.spot import (
-    PRAGUE_TZ as SPOT_PRAGUE_TZ,
     SpotPrice,
     fetch_spot_prices,
     get_current_price,
@@ -120,7 +119,6 @@ def show_live_data() -> None:
         return
 
     # Metriky
-    current = get_current_price(prices)
     df = load_prices_as_df(prices)
 
     col1, col2, col3, col4 = st.columns(4)
