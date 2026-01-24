@@ -22,7 +22,7 @@ jobs:
 
       - name: Merge main do data
         run: |
-          git fetch origin data
-          git checkout data
+          git fetch origin data:refs/remotes/origin/data
+          git checkout -B data origin/data
           git merge origin/main -m "Auto-sync: merge main into data"
           git push origin data
