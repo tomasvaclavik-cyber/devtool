@@ -94,4 +94,4 @@ Data se automaticky stahují každý den v 6:00 UTC pomocí GitHub Actions a ukl
 
 - **OTE** (ote-cr.cz) - spotové ceny elektřiny (15min intervaly)
 - **ČNB** (cnb.cz) - kurz EUR/CZK
-- **Open-Meteo** - předpověď počasí
+
