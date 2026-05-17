@@ -10,10 +10,7 @@ import httpx
 PRAGUE_TZ = ZoneInfo("Europe/Prague")
 
 OTE_BASE_URL = "https://www.ote-cr.cz"
-# Anglická verze API vrací title u dataLine, což umožňuje rozlišit cenu od objemu
-OTE_CHART_DATA_URL = (
-    f"{OTE_BASE_URL}/en/short-term-markets/electricity/day-ahead-market/@@chart-data"
-)
+OTE_CHART_DATA_URL = f"{OTE_BASE_URL}/pw-data/chart-data/01"
 CNB_RATE_URL = (
     "https://www.cnb.cz/en/financial-markets/foreign-exchange-market/"
     "central-bank-exchange-rate-fixing/central-bank-exchange-rate-fixing/daily.txt"
@@ -66,9 +63,10 @@ def fetch_spot_prices(report_date: date | None = None) -> tuple[list[SpotPrice],
 
     params = {
         "report_date": report_date.strftime("%Y-%m-%d"),
+        "language": "en",
     }
 
-    with httpx.Client() as client:
+    with httpx.Client(follow_redirects=True) as client:
         response = client.get(OTE_CHART_DATA_URL, params=params, timeout=30.0)
         response.raise_for_status()
         data = response.json()
