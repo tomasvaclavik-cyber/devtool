@@ -21,12 +21,12 @@ dev = [
     "mypy>=1.0.0",
 ]
 dashboard = [
-    "streamlit>=1.30.0",
+    "streamlit>=1.58.0",
     "pandas>=2.0.0",
     "altair>=5.0.0",
 ]
 analysis = [
-    "streamlit>=1.30.0",
+    "streamlit>=1.58.0",
     "pandas>=2.0.0",
     "altair>=5.0.0",
     "scipy>=1.11.0",
