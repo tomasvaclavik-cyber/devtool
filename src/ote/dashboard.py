@@ -113,9 +113,6 @@ def colored_bar_chart(df: pd.DataFrame, height: int = 400) -> alt.Chart:
     )
 
     df = df.copy()
-    df["Barva"] = df["Cena (CZK/MWh)"].apply(
-        lambda v: price_color(v, p10, p30, p70, p90)
-    )
     df["Hladina"] = df["Cena (CZK/MWh)"].apply(lambda v: (
         "Velmi levná" if v <= p10 else
         "Levná" if v <= p30 else
@@ -124,32 +121,32 @@ def colored_bar_chart(df: pd.DataFrame, height: int = 400) -> alt.Chart:
         "Velmi drahá"
     ))
 
-    color_scale = alt.Scale(
-        domain=["Velmi levná", "Levná", "Normální", "Drahá", "Velmi drahá"],
-        range=["#22C55E", "#86EFAC", "#EAB308", "#F97316", "#EF4444"],
+    return (
+        alt.Chart(df)
+        .mark_bar()
+        .encode(
+            x=alt.X("Hodina:N", title="Čas", sort=None,
+                    axis=alt.Axis(labelAngle=-45, labelFontSize=11)),
+            y=alt.Y("Cena (CZK/MWh):Q", title="CZK/MWh",
+                    axis=alt.Axis(format=",.0f")),
+            color=alt.Color(
+                "Hladina:N",
+                scale=alt.Scale(
+                    domain=["Velmi levná", "Levná", "Normální", "Drahá", "Velmi drahá"],
+                    range=["#22C55E", "#86EFAC", "#EAB308", "#F97316", "#EF4444"],
+                ),
+                legend=alt.Legend(title="Cenová hladina", orient="bottom"),
+            ),
+            tooltip=[
+                alt.Tooltip("Hodina:N", title="Čas"),
+                alt.Tooltip("Cena (CZK/MWh):Q", title="CZK/MWh", format=",.0f"),
+                alt.Tooltip("Cena (EUR/MWh):Q", title="EUR/MWh", format=",.2f"),
+                alt.Tooltip("Hladina:N", title="Hladina"),
+            ],
+        )
+        .properties(height=height)
+        .interactive()
     )
-
-    base = alt.Chart(df).encode(
-        x=alt.X("Hodina:N", title="Čas", sort=None,
-                axis=alt.Axis(labelAngle=-45, labelFontSize=11)),
-        y=alt.Y("Cena (CZK/MWh):Q", title="CZK/MWh",
-                axis=alt.Axis(format=",.0f")),
-        color=alt.Color("Hladina:N", scale=color_scale,
-                        legend=alt.Legend(title="Cenová hladina", orient="bottom")),
-        tooltip=[
-            alt.Tooltip("Hodina:N", title="Čas"),
-            alt.Tooltip("Cena (CZK/MWh):Q", title="CZK/MWh", format=",.0f"),
-            alt.Tooltip("Cena (EUR/MWh):Q", title="EUR/MWh", format=",.2f"),
-            alt.Tooltip("Hladina:N", title="Hladina"),
-        ],
-    )
-
-    bars = base.mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
-    zero_line = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(
-        color="#6B7280", strokeDash=[4, 4], strokeWidth=1
-    ).encode(y="y:Q")
-
-    return (bars + zero_line).properties(height=height).interactive()
 
 
 def main() -> None:
