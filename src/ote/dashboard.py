@@ -58,9 +58,17 @@ CSS = """
         color: #9CA3AF;
     }
     [data-testid="metric-container"] [data-testid="stMetricValue"] {
-        font-size: 1.1rem;
-        font-weight: 700;
+        font-size: 1rem !important;
+        font-weight: 700 !important;
         color: #F9FAFB;
+    }
+    [data-testid="metric-container"] [data-testid="stMetricValue"] > div {
+        font-size: 1rem !important;
+        font-weight: 700 !important;
+    }
+    [data-testid="stMetricValue"] {
+        font-size: 1rem !important;
+        font-weight: 700 !important;
     }
 
     /* Divider */
