@@ -58,7 +58,7 @@ CSS = """
         color: #9CA3AF;
     }
     [data-testid="metric-container"] [data-testid="stMetricValue"] {
-        font-size: 1.6rem;
+        font-size: 1.1rem;
         font-weight: 700;
         color: #F9FAFB;
     }
