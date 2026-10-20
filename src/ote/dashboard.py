@@ -183,8 +183,9 @@ def main() -> None:
 
     st.markdown("---")
 
-    tab_prices, tab_analysis, tab_profiles, tab_forecast, tab_weather = st.tabs([
+    tab_prices, tab_my, tab_analysis, tab_profiles, tab_forecast, tab_weather = st.tabs([
         "⚡ Aktuální ceny",
+        "🏠 Moje cena",
         "📊 Analýza",
         "👤 Profily & Riziko",
         "🔮 Predikce",
@@ -193,6 +194,8 @@ def main() -> None:
 
     with tab_prices:
         show_prices_tab()
+    with tab_my:
+        show_my_price_tab()
     with tab_analysis:
         show_analysis_tab()
     with tab_profiles:
@@ -363,6 +366,212 @@ def show_historical_data() -> None:
             )
 
     conn.close()
+
+
+# ─── TAB: Moje cena ──────────────────────────────────────────────────────────
+
+def tariff_df(prices: list[SpotPrice]) -> pd.DataFrame:
+    """Spotové a koncové ceny v Kč/kWh po 15min intervalech."""
+    from ote.tariff import compute_tariff_prices
+
+    rows = compute_tariff_prices([(p.time_from, p.price_czk) for p in prices])
+    return pd.DataFrame([
+        {
+            "Hodina": r.time_from.strftime("%H:%M"),
+            "Spot (Kč/kWh)": r.spot_kwh,
+            "Tarif": "NT" if r.is_low_tariff else "VT",
+            "Celkem (Kč/kWh)": r.total_kwh,
+        }
+        for r in rows
+    ])
+
+
+def kwh_bar_chart(
+    df: pd.DataFrame,
+    value_col: str,
+    now: datetime | None = None,
+    by_tariff: bool = False,
+    height: int = 280,
+) -> alt.LayerChart | alt.Chart:
+    """Sloupcový graf v Kč/kWh po 15 min (obdoba apexcharts karet v HA)."""
+    color: alt.Color | alt.ColorValue
+    if by_tariff:
+        color = alt.Color(
+            "Tarif:N",
+            scale=alt.Scale(domain=["NT", "VT"], range=["#22C55E", "#EF4444"]),
+            legend=alt.Legend(title="Tarif", orient="bottom"),
+        )
+    else:
+        color = alt.value("#60A5FA")
+
+    bars = (
+        alt.Chart(df)
+        .mark_bar(cornerRadiusTopLeft=2, cornerRadiusTopRight=2)
+        .encode(
+            x=alt.X(
+                "Hodina:N", title=None, sort=None,
+                # Popisky jen celých hodin, jinak by 96 sloupců bylo nečitelných
+                axis=alt.Axis(labelAngle=0, labelColor="#94A3B8", ticks=False,
+                              labelExpr="substring(datum.value, 3, 5) == '00' && "
+                                        "toNumber(substring(datum.value, 0, 2)) % 2 == 0 "
+                                        "? datum.value : ''"),
+            ),
+            y=alt.Y(f"{value_col}:Q", title="Kč/kWh", axis=alt.Axis(format=",.2f")),
+            color=color,
+            tooltip=[
+                alt.Tooltip("Hodina:N", title="Čas"),
+                alt.Tooltip("Tarif:N", title="Tarif"),
+                alt.Tooltip("Spot (Kč/kWh):Q", title="Spot", format=",.2f"),
+                alt.Tooltip("Celkem (Kč/kWh):Q", title="Celkem", format=",.2f"),
+            ],
+        )
+    )
+    chart: alt.LayerChart | alt.Chart = bars
+    if now is not None:
+        slot = f"{now.hour:02d}:{now.minute // 15 * 15:02d}"
+        now_df = pd.DataFrame({"Hodina": [slot], "label": ["Teď"]})
+        rule = (
+            alt.Chart(now_df)
+            .mark_rule(color="#F9FAFB", strokeDash=[4, 3], strokeWidth=1.5)
+            .encode(x=alt.X("Hodina:N", sort=None))
+        )
+        label = (
+            alt.Chart(now_df)
+            .mark_text(align="left", dx=4, color="#F9FAFB", fontSize=11)
+            .encode(x=alt.X("Hodina:N", sort=None), y=alt.value(6), text="label:N")
+        )
+        chart = bars + rule + label
+    return chart.properties(height=height)
+
+
+def show_my_price_tab() -> None:
+    from ote.tariff import (
+        DISTRIBUTION_NT,
+        DISTRIBUTION_VT,
+        ELECTREE_FEE,
+        ENERGY_TAX,
+        SYSTEM_SERVICES,
+        boiler_price,
+        czk_mwh_to_kwh,
+        high_tariff_price,
+        is_low_tariff,
+        low_tariff_price,
+    )
+
+    now = datetime.now(PRAGUE_TZ)
+    today = now.date()
+
+    with st.spinner("Načítám ceny z OTE..."):
+        try:
+            prices, _ = fetch_spot_prices(today)
+        except Exception as e:
+            st.error(f"Chyba při načítání dat: {e}")
+            return
+        try:
+            tomorrow_prices, _ = fetch_spot_prices(today + timedelta(days=1))
+        except Exception:
+            tomorrow_prices = []
+
+    if not prices:
+        st.warning("Žádná data nejsou k dispozici.")
+        return
+
+    df_today = tariff_df(prices)
+    df_tomorrow = tariff_df(tomorrow_prices) if tomorrow_prices else None
+    current = get_current_price(prices)
+
+    # ── Přehled cen ──
+    st.subheader("Přehled cen")
+    spot = czk_mwh_to_kwh(current.price_czk) if current else None
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("Spot", f"{spot:.2f} Kč/kWh" if spot is not None else "—",
+                  help="Aktuální spotová cena bez DPH")
+    with col2:
+        st.metric("Nízký tarif",
+                  f"{low_tariff_price(spot):.2f} Kč/kWh" if spot is not None else "—")
+    with col3:
+        st.metric("Vysoký tarif",
+                  f"{high_tariff_price(spot):.2f} Kč/kWh" if spot is not None else "—")
+    with col4:
+        boiler_slot = st.empty()
+
+    if spot is not None:
+        low = is_low_tariff(now.hour)
+        tariff = "NÍZKÝ TARIF" if low else "VYSOKÝ TARIF"
+        color = "#22C55E" if low else "#EF4444"
+        total = low_tariff_price(spot) if low else high_tariff_price(spot)
+        st.markdown(
+            f"<div style='margin-top:8px; padding:12px 20px; background:{color}20; "
+            f"border:1px solid {color}; border-radius:10px; text-align:center; color:{color}; "
+            f"font-weight:700; font-size:1.1rem;'>Teď platí {tariff} — "
+            f"{total:.2f} Kč/kWh</div>",
+            unsafe_allow_html=True,
+        )
+
+    # ── Průměr spotu ──
+    st.subheader("Průměr spotu")
+    col1, col2 = st.columns(2)
+    with col1:
+        st.metric("Dnes", f"{df_today['Spot (Kč/kWh)'].mean():.2f} Kč/kWh")
+    with col2:
+        if df_tomorrow is not None:
+            st.metric("Zítra", f"{df_tomorrow['Spot (Kč/kWh)'].mean():.2f} Kč/kWh")
+        else:
+            st.metric("Zítra", "—", help="Ceny zítra budou k dispozici po 13:10")
+
+    st.markdown("---")
+
+    # ── Grafy ──
+    st.subheader("Spot během dne")
+    st.altair_chart(kwh_bar_chart(df_today, "Spot (Kč/kWh)", now=now), use_container_width=True)
+
+    st.subheader("Spot zítra")
+    if df_tomorrow is not None:
+        st.altair_chart(kwh_bar_chart(df_tomorrow, "Spot (Kč/kWh)"), use_container_width=True)
+    else:
+        st.info("Ceny zítra budou k dispozici po 13:10.")
+
+    st.subheader("Celková cena podle tarifu")
+    st.altair_chart(
+        kwh_bar_chart(df_today, "Celkem (Kč/kWh)", now=now, by_tariff=True),
+        use_container_width=True,
+    )
+
+    # ── Bojler ──
+    boiler_value = st.slider("Bojler hodnota", min_value=0.0, max_value=6.0, value=4.0,
+                             step=0.1, key="boiler_value")
+    with boiler_slot:
+        st.metric("Bojler", f"{boiler_price(boiler_value):.2f} Kč",
+                  help="Bojler hodnota × 2,4 Kč")
+
+    with st.expander("Jak se cena počítá"):
+        st.markdown(
+            f"""
+            **Celkem = spot × 1,21 (DPH) + poplatek Electree + distribuce + systémové služby
+            + daň z elektřiny**
+
+            | Složka | Kč/kWh |
+            |--------|-------:|
+            | Poplatek Electree (odběr ze spotu) | {ELECTREE_FEE:.4f} |
+            | Distribuce VT (D25d, ČEZ 2026) | {DISTRIBUTION_VT:.5f} |
+            | Distribuce NT (D25d, ČEZ 2026) | {DISTRIBUTION_NT:.5f} |
+            | Systémové služby | {SYSTEM_SERVICES:.5f} |
+            | Daň z elektřiny | {ENERGY_TAX:.5f} |
+
+            Nízký tarif: 00:00–06:00 a 19:00–21:00, jinak vysoký tarif.
+            """
+        )
+
+    with st.expander("Tabulka dat"):
+        st.dataframe(
+            df_today[["Hodina", "Tarif", "Spot (Kč/kWh)", "Celkem (Kč/kWh)"]],
+            use_container_width=True, hide_index=True,
+            column_config={
+                "Spot (Kč/kWh)": st.column_config.NumberColumn(format="%.2f"),
+                "Celkem (Kč/kWh)": st.column_config.NumberColumn(format="%.2f"),
+            },
+        )
 
 
 # ─── TAB: Analýza ────────────────────────────────────────────────────────────

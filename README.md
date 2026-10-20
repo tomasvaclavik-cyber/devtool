@@ -61,6 +61,12 @@ ote dashboard -p 8080 # vlastní port
 - Statistiky (min, max, průměr)
 - Porovnání posledních dnů
 
+### Moje cena
+- Koncová cena podle mého tarifu (Electree spot + distribuce ČEZ D25d 2026), převzato z Home Assistantu
+- Aktuální spot, cena v nízkém a vysokém tarifu, bojler, průměr spotu dnes / zítra
+- Grafy: spot během dne, spot zítra, celková cena podle tarifu (NT 0–6 a 19–21 h)
+- Výpočet v `src/ote/tariff.py`
+
 ### Analýza cenových vzorců
 - Aktuální cenová hladina s klasifikací (levná/normální/drahá)
 - Průměrné ceny podle hodiny
