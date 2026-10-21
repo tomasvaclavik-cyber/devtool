@@ -1234,7 +1234,6 @@ def show_weather_tab() -> None:
                         f"<div style='font-size:1.8rem;margin:4px 0'>{type_icon.get(f.weather_type,'?')}</div>"
                         f"<div style='font-weight:700;font-size:1rem'>{f.avg_temperature:.0f}°C</div>"
                         f"<div style='font-size:0.75rem;color:{color};margin-top:4px'>"
-                        f"{impact_color.get(f.weather_type,'')}"
                         f"{'↓ levnější' if f.weather_type in ('sunny','windy') else '↑ dražší' if f.weather_type == 'cloudy' else '~ běžné'}"
                         f"</div></div>",
                         unsafe_allow_html=True,
