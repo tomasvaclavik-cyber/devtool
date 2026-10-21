@@ -67,6 +67,11 @@ ote dashboard -p 8080 # vlastní port
 - Grafy: spot během dne, spot zítra, celková cena podle tarifu (NT 0–6 a 19–21 h)
 - Výpočet v `src/ote/tariff.py`
 
+### Vývoj cen
+- Průměrné ceny po měsících s výběrem roku
+- Průměr roku, nejlevnější a nejdražší měsíc, počet dní s daty, negativní intervaly
+- Sloupcový graf měsíc × průměrná cena s čárou průměru roku
+
 ### Analýza cenových vzorců
 - Aktuální cenová hladina s klasifikací (levná/normální/drahá)
 - Průměrné ceny podle hodiny

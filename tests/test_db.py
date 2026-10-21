@@ -7,9 +7,11 @@ import pytest
 
 from ote.db import (
     get_available_dates,
+    get_available_years,
     get_daily_stats,
     get_data_days_count,
     get_hourly_aggregates,
+    get_monthly_stats,
     get_overall_stats,
     get_prices_for_date,
     get_prices_for_range,
@@ -214,3 +216,37 @@ def test_save_prices_upsert(test_db: sqlite3.Connection, sample_prices: list[Spo
 
     # Ověř že ceny jsou aktualizované
     assert loaded[0].price_eur == sample_prices[0].price_eur * 2
+
+
+def _day_prices(day: date, price_czk: float) -> list[SpotPrice]:
+    return [
+        SpotPrice(
+            time_from=datetime(day.year, day.month, day.day, h, 0),
+            time_to=datetime(day.year, day.month, day.day, h, 59, 59),
+            price_eur=price_czk / 25.0,
+            price_czk=price_czk,
+        )
+        for h in range(24)
+    ]
+
+
+def test_get_monthly_stats(test_db: sqlite3.Connection) -> None:
+    save_prices(test_db, date(2025, 12, 31), _day_prices(date(2025, 12, 31), 900.0), 25.0)
+    save_prices(test_db, date(2026, 1, 1), _day_prices(date(2026, 1, 1), 1000.0), 25.0)
+    save_prices(test_db, date(2026, 1, 2), _day_prices(date(2026, 1, 2), 2000.0), 25.0)
+    save_prices(test_db, date(2026, 3, 5), _day_prices(date(2026, 3, 5), -100.0), 25.0)
+
+    assert get_available_years(test_db) == [2026, 2025]
+
+    stats = get_monthly_stats(test_db, 2026)
+    assert [s.month for s in stats] == [1, 3]
+    assert stats[0].days == 2
+    assert stats[0].intervals == 48
+    assert stats[0].avg_price == pytest.approx(1500.0)
+    assert stats[0].min_price == 1000.0
+    assert stats[0].max_price == 2000.0
+    assert stats[0].negative_count == 0
+    assert stats[1].negative_count == 24
+
+    assert [s.month for s in get_monthly_stats(test_db, 2025)] == [12]
+    assert get_monthly_stats(test_db, 2024) == []

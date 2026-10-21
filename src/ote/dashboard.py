@@ -183,9 +183,12 @@ def main() -> None:
 
     st.markdown("---")
 
-    tab_prices, tab_my, tab_analysis, tab_profiles, tab_forecast, tab_weather = st.tabs([
+    (
+        tab_prices, tab_my, tab_trend, tab_analysis, tab_profiles, tab_forecast, tab_weather,
+    ) = st.tabs([
         "⚡ Aktuální ceny",
         "🏠 Moje cena",
+        "📈 Vývoj cen",
         "📊 Analýza",
         "👤 Profily & Riziko",
         "🔮 Predikce",
@@ -196,6 +199,8 @@ def main() -> None:
         show_prices_tab()
     with tab_my:
         show_my_price_tab()
+    with tab_trend:
+        show_trend_tab()
     with tab_analysis:
         show_analysis_tab()
     with tab_profiles:
@@ -570,6 +575,130 @@ def show_my_price_tab() -> None:
             column_config={
                 "Spot (Kč/kWh)": st.column_config.NumberColumn(format="%.2f"),
                 "Celkem (Kč/kWh)": st.column_config.NumberColumn(format="%.2f"),
+            },
+        )
+
+
+# ─── TAB: Vývoj cen ──────────────────────────────────────────────────────────
+
+MONTH_NAMES = [
+    "Leden", "Únor", "Březen", "Duben", "Květen", "Červen",
+    "Červenec", "Srpen", "Září", "Říjen", "Listopad", "Prosinec",
+]
+
+
+def show_trend_tab() -> None:
+    from ote.db import get_available_years, get_monthly_stats
+
+    conn = get_connection()
+    years = get_available_years(conn)
+
+    if not years:
+        st.warning("Databáze je prázdná.")
+        conn.close()
+        return
+
+    year = st.segmented_control(
+        "Rok", options=years, default=years[0], key="trend_year",
+        format_func=str,
+    ) or years[0]
+
+    stats = get_monthly_stats(conn, year)
+    conn.close()
+
+    if not stats:
+        st.info(f"Pro rok {year} nejsou v databázi žádná data.")
+        return
+
+    total_intervals = sum(s.intervals for s in stats)
+    year_avg = sum(s.avg_price * s.intervals for s in stats) / total_intervals
+    cheapest = min(stats, key=lambda s: s.avg_price)
+    priciest = max(stats, key=lambda s: s.avg_price)
+    days = sum(s.days for s in stats)
+
+    # ── Základní údaje ──
+    st.subheader(f"Rok {year}")
+    col1, col2, col3, col4, col5 = st.columns(5)
+    with col1:
+        st.metric("Průměr roku", f"{year_avg:,.0f} CZK/MWh",
+                  help=f"{year_avg / 1000:.2f} Kč/kWh bez DPH, vážený přes všechny intervaly")
+    with col2:
+        st.metric("Nejlevnější měsíc", MONTH_NAMES[cheapest.month - 1])
+        st.caption(f"{cheapest.avg_price:,.0f} CZK/MWh")
+    with col3:
+        st.metric("Nejdražší měsíc", MONTH_NAMES[priciest.month - 1])
+        st.caption(f"{priciest.avg_price:,.0f} CZK/MWh")
+    with col4:
+        st.metric("Dnů s daty", days, help=f"Měsíců s daty: {len(stats)} z 12")
+    with col5:
+        st.metric("Negativní intervaly", f"{sum(s.negative_count for s in stats):,}",
+                  help="Počet 15min intervalů se zápornou cenou")
+
+    first, last = stats[0].month, stats[-1].month
+    if len(stats) < 12:
+        st.caption(
+            f"Data pokrývají {MONTH_NAMES[first - 1].lower()} – {MONTH_NAMES[last - 1].lower()} "
+            f"{year}; průměr roku je jen z těchto měsíců."
+        )
+
+    # ── Graf ──
+    st.subheader("Průměrná cena podle měsíců")
+    month_df = pd.DataFrame([
+        {
+            "Měsíc": MONTH_NAMES[s.month - 1],
+            "Průměr": s.avg_price,
+            "Kč/kWh": s.avg_price / 1000,
+            "Min": s.min_price,
+            "Max": s.max_price,
+            "Dnů": s.days,
+            "Negativní intervaly": s.negative_count,
+        }
+        for s in stats
+    ])
+
+    x = alt.X("Měsíc:N", title=None, sort=MONTH_NAMES,
+              scale=alt.Scale(domain=MONTH_NAMES), axis=alt.Axis(labelAngle=0))
+    bars = (
+        alt.Chart(month_df)
+        .mark_bar(color="#3B82F6", cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
+        .encode(
+            x=x,
+            y=alt.Y("Průměr:Q", title="CZK/MWh", axis=alt.Axis(format=",.0f")),
+            tooltip=[
+                alt.Tooltip("Měsíc:N"),
+                alt.Tooltip("Průměr:Q", title="Průměr CZK/MWh", format=",.0f"),
+                alt.Tooltip("Kč/kWh:Q", title="Průměr Kč/kWh", format=",.2f"),
+                alt.Tooltip("Min:Q", title="Min CZK/MWh", format=",.0f"),
+                alt.Tooltip("Max:Q", title="Max CZK/MWh", format=",.0f"),
+                alt.Tooltip("Dnů:Q"),
+                alt.Tooltip("Negativní intervaly:Q"),
+            ],
+        )
+    )
+    labels = (
+        alt.Chart(month_df)
+        .mark_text(dy=-8, color="#E5E7EB", fontSize=11)
+        .encode(x=x, y="Průměr:Q", text=alt.Text("Průměr:Q", format=",.0f"))
+    )
+    avg_rule = (
+        alt.Chart(pd.DataFrame({"Průměr roku": [year_avg]}))
+        .mark_rule(color="#F97316", strokeDash=[6, 4], strokeWidth=2)
+        .encode(y="Průměr roku:Q",
+                tooltip=[alt.Tooltip("Průměr roku:Q", format=",.0f")])
+    )
+    st.altair_chart((bars + labels + avg_rule).properties(height=340),
+                    use_container_width=True)
+    st.caption("Oranžová čára = průměr roku.")
+
+    with st.expander("Tabulka po měsících"):
+        st.dataframe(
+            month_df,
+            use_container_width=True, hide_index=True,
+            column_config={
+                "Průměr": st.column_config.NumberColumn("Průměr (CZK/MWh)", format="%.0f"),
+                "Kč/kWh": st.column_config.NumberColumn("Průměr (Kč/kWh)", format="%.2f"),
+                "Min": st.column_config.NumberColumn("Min (CZK/MWh)", format="%.0f"),
+                "Max": st.column_config.NumberColumn("Max (CZK/MWh)", format="%.0f"),
             },
         )
 

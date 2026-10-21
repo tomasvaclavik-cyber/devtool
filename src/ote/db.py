@@ -402,3 +402,68 @@ def get_daily_averages(
         )
         for row in cursor.fetchall()
     ]
+
+
+@dataclass
+class MonthlyStats:
+    """Měsíční statistiky cen."""
+
+    month: int
+    days: int
+    intervals: int
+    avg_price: float
+    min_price: float
+    max_price: float
+    negative_count: int
+
+
+def get_available_years(conn: sqlite3.Connection) -> list[int]:
+    """Vrátí roky, pro které jsou v databázi data (od nejnovějšího)."""
+    init_db(conn)
+
+    cursor = conn.execute("""
+        SELECT DISTINCT CAST(strftime('%Y', report_date) AS INTEGER) as year
+        FROM spot_prices
+        ORDER BY year DESC
+    """)
+
+    return [row["year"] for row in cursor.fetchall()]
+
+
+def get_monthly_stats(conn: sqlite3.Connection, year: int) -> list[MonthlyStats]:
+    """Vrátí průměrné, minimální a maximální ceny po měsících daného roku.
+
+    Průměr je přes všechny 15min intervaly měsíce (časově vážený).
+    """
+    init_db(conn)
+
+    cursor = conn.execute(
+        """
+        SELECT
+            CAST(strftime('%m', report_date) AS INTEGER) as month,
+            COUNT(DISTINCT report_date) as days,
+            COUNT(*) as intervals,
+            AVG(price_czk) as avg_price,
+            MIN(price_czk) as min_price,
+            MAX(price_czk) as max_price,
+            SUM(CASE WHEN price_czk < 0 THEN 1 ELSE 0 END) as negative_count
+        FROM spot_prices
+        WHERE strftime('%Y', report_date) = ?
+        GROUP BY month
+        ORDER BY month
+        """,
+        (str(year),),
+    )
+
+    return [
+        MonthlyStats(
+            month=row["month"],
+            days=row["days"],
+            intervals=row["intervals"],
+            avg_price=row["avg_price"],
+            min_price=row["min_price"],
+            max_price=row["max_price"],
+            negative_count=row["negative_count"],
+        )
+        for row in cursor.fetchall()
+    ]
