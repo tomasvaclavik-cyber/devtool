@@ -604,6 +604,7 @@ def show_trend_tab() -> None:
     ) or years[0]
 
     stats = get_monthly_stats(conn, year)
+    ly_stats = {m.month: m for m in get_monthly_stats(conn, year - 1)}
     conn.close()
 
     if not stats:
@@ -642,7 +643,7 @@ def show_trend_tab() -> None:
         )
 
     # ── Graf ──
-    st.subheader("Průměrná cena podle měsíců")
+    st.subheader(f"Průměrná cena podle měsíců — {year} vs {year - 1}")
     month_df = pd.DataFrame([
         {
             "Měsíc": MONTH_NAMES[s.month - 1],
@@ -652,33 +653,62 @@ def show_trend_tab() -> None:
             "Max": s.max_price,
             "Dnů": s.days,
             "Negativní intervaly": s.negative_count,
+            "LY": ly_stats[s.month].avg_price if s.month in ly_stats else None,
+            "Změna vs LY (%)": (
+                (s.avg_price / ly_stats[s.month].avg_price - 1) * 100
+                if s.month in ly_stats and ly_stats[s.month].avg_price else None
+            ),
         }
         for s in stats
     ])
 
+    # Dlouhý formát: jeden řádek za měsíc a rok, sloupce vedle sebe přes xOffset
+    cy, ly = str(year), str(year - 1)
+    chart_df = pd.concat([
+        pd.DataFrame([
+            {"Měsíc": MONTH_NAMES[m.month - 1], "Rok": ly, "Průměr": m.avg_price,
+             "Dnů": m.days, "Změna vs LY (%)": None}
+            for m in ly_stats.values()
+        ]),
+        month_df[["Měsíc", "Průměr", "Dnů", "Změna vs LY (%)"]].assign(Rok=cy),
+    ], ignore_index=True)
+
     x = alt.X("Měsíc:N", title=None, sort=MONTH_NAMES,
               scale=alt.Scale(domain=MONTH_NAMES), axis=alt.Axis(labelAngle=0))
+    x_offset = alt.XOffset("Rok:N", sort=[ly, cy], scale=alt.Scale(domain=[ly, cy]))
     bars = (
-        alt.Chart(month_df)
-        .mark_bar(color="#3B82F6", cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
+        alt.Chart(chart_df)
+        .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
         .encode(
             x=x,
+            xOffset=x_offset,
             y=alt.Y("Průměr:Q", title="CZK/MWh", axis=alt.Axis(format=",.0f")),
+            color=alt.Color(
+                "Rok:N",
+                scale=alt.Scale(domain=[ly, cy], range=["#64748B", "#3B82F6"]),
+                legend=alt.Legend(title=None, orient="top"),
+            ),
             tooltip=[
                 alt.Tooltip("Měsíc:N"),
+                alt.Tooltip("Rok:N"),
                 alt.Tooltip("Průměr:Q", title="Průměr CZK/MWh", format=",.0f"),
-                alt.Tooltip("Kč/kWh:Q", title="Průměr Kč/kWh", format=",.2f"),
-                alt.Tooltip("Min:Q", title="Min CZK/MWh", format=",.0f"),
-                alt.Tooltip("Max:Q", title="Max CZK/MWh", format=",.0f"),
                 alt.Tooltip("Dnů:Q"),
-                alt.Tooltip("Negativní intervaly:Q"),
+                alt.Tooltip("Změna vs LY (%):Q", format="+.1f"),
             ],
         )
     )
     labels = (
-        alt.Chart(month_df)
-        .mark_text(dy=-8, color="#E5E7EB", fontSize=11)
-        .encode(x=x, y="Průměr:Q", text=alt.Text("Průměr:Q", format=",.0f"))
+        alt.Chart(chart_df)
+        .mark_text(dy=-8, fontSize=10)
+        .encode(
+            x=x,
+            xOffset=x_offset,
+            y="Průměr:Q",
+            text=alt.Text("Průměr:Q", format=",.0f"),
+            color=alt.Color("Rok:N", scale=alt.Scale(domain=[ly, cy],
+                                                     range=["#94A3B8", "#E5E7EB"]),
+                            legend=None),
+        )
     )
     avg_rule = (
         alt.Chart(pd.DataFrame({"Průměr roku": [year_avg]}))
@@ -686,9 +716,19 @@ def show_trend_tab() -> None:
         .encode(y="Průměr roku:Q",
                 tooltip=[alt.Tooltip("Průměr roku:Q", format=",.0f")])
     )
-    st.altair_chart((bars + labels + avg_rule).properties(height=340),
-                    use_container_width=True)
-    st.caption("Oranžová čára = průměr roku.")
+    st.altair_chart(
+        (bars + labels + avg_rule).resolve_scale(color="independent").properties(height=360),
+        use_container_width=True,
+    )
+
+    common = [m for m in month_df.itertuples() if m.LY is not None and not pd.isna(m.LY)]
+    if not ly_stats:
+        st.caption(f"Oranžová čára = průměr roku {year}. Pro rok {year - 1} nejsou v databázi "
+                   f"data, porovnání vs LY zatím není k dispozici.")
+    else:
+        st.caption(f"Oranžová čára = průměr roku {year}. Šedé sloupce = {year - 1}, "
+                   f"porovnání je k dispozici pro {len(common)} "
+                   f"{'měsíc' if len(common) == 1 else 'měsíce' if len(common) < 5 else 'měsíců'}.")
 
     with st.expander("Tabulka po měsících"):
         st.dataframe(
@@ -699,6 +739,8 @@ def show_trend_tab() -> None:
                 "Kč/kWh": st.column_config.NumberColumn("Průměr (Kč/kWh)", format="%.2f"),
                 "Min": st.column_config.NumberColumn("Min (CZK/MWh)", format="%.0f"),
                 "Max": st.column_config.NumberColumn("Max (CZK/MWh)", format="%.0f"),
+                "LY": st.column_config.NumberColumn(f"{year - 1} (CZK/MWh)", format="%.0f"),
+                "Změna vs LY (%)": st.column_config.NumberColumn(format="%+.1f %%"),
             },
         )
 

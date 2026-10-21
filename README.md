@@ -70,7 +70,7 @@ ote dashboard -p 8080 # vlastní port
 ### Vývoj cen
 - Průměrné ceny po měsících s výběrem roku
 - Průměr roku, nejlevnější a nejdražší měsíc, počet dní s daty, negativní intervaly
-- Sloupcový graf měsíc × průměrná cena s čárou průměru roku
+- Sloupcový graf měsíc × průměrná cena s porovnáním vs minulý rok (LY) a čárou průměru roku
 
 ### Analýza cenových vzorců
 - Aktuální cenová hladina s klasifikací (levná/normální/drahá)
