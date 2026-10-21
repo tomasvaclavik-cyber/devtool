@@ -88,7 +88,7 @@ ote dashboard -p 8080 # vlastní port
 - Predikce špiček pro následující den
 
 ### Počasí a ceny
-- Předpověď počasí (Praha)
+- Předpověď počasí (Kravaře u Opavy)
 - Korelace počasí a cen elektřiny (teplota, oblačnost, vítr, sluneční záření)
 - Predikce cen s vlivem počasí
 

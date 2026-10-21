@@ -12,8 +12,8 @@ import httpx
 # https://open-meteo.com/
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
 
-# Souřadnice pro Českou republiku (Praha)
-CZECH_COORDS = {"latitude": 50.08, "longitude": 14.43}
+# Souřadnice pro předpověď počasí (Kravaře u Opavy – domov v Home Assistantu)
+CZECH_COORDS = {"latitude": 49.94, "longitude": 18.00}
 
 
 @dataclass

@@ -1202,7 +1202,7 @@ def show_weather_tab() -> None:
         st.error("Modul počasí není dostupný.")
         return
 
-    st.subheader("Předpověď počasí — Praha (7 dní)")
+    st.subheader("Předpověď počasí — Kravaře (7 dní)")
 
     try:
         with st.spinner("Načítám předpověď počasí..."):
