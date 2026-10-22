@@ -134,14 +134,14 @@ def get_current_price_debug(prices: list[SpotPrice]) -> tuple[SpotPrice | None, 
     return None, debug_info
 
 
-def next_refresh_time(now: datetime, offset_minutes: int = 1) -> datetime:
-    """Vrátí nejbližší čas obnovy: začátek 15min intervalu + offset (xx:01, :16, :31, :46).
+def next_refresh_time(now: datetime, offset_seconds: int = 5) -> datetime:
+    """Vrátí nejbližší čas obnovy: začátek 15min intervalu + offset (xx:00:05, :15:05, …).
 
-    OTE ceny se mění po čtvrthodinách, obnova chvíli po začátku intervalu
-    zajistí, že se zobrazí cena právě začínajícího intervalu.
+    Day-ahead ceny jsou známé předem, stačí obnovit hned po začátku intervalu.
+    Pár sekund rezervy chrání před časovačem, který odbije o zlomek sekundy dřív.
     """
     slot_start = now.replace(minute=now.minute // 15 * 15, second=0, microsecond=0)
-    candidate = slot_start + timedelta(minutes=offset_minutes)
+    candidate = slot_start + timedelta(seconds=offset_seconds)
     if candidate <= now:
         candidate += timedelta(minutes=15)
     return candidate

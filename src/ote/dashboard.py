@@ -169,7 +169,7 @@ def main() -> None:
     now = datetime.now(PRAGUE_TZ)
     next_refresh = next_refresh_time(now)
 
-    # Obnova zarovnaná na xx:01, :16, :31, :46 – interval se přepočítá při každém běhu
+    # Obnova zarovnaná na xx:00:05, :15:05, :30:05, :45:05 – interval se přepočítá při každém běhu
     delay_ms = max(int((next_refresh - now).total_seconds() * 1000), 5000)
     st_autorefresh(interval=delay_ms, debounce=False, key="price_refresh")
 
