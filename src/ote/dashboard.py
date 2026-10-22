@@ -20,6 +20,7 @@ from ote.spot import (
     fetch_spot_prices,
     get_current_price,
     get_current_price_debug,
+    next_refresh_time,
 )
 
 PRAGUE_TZ = ZoneInfo("Europe/Prague")
@@ -165,9 +166,12 @@ def main() -> None:
     )
     st.markdown(CSS, unsafe_allow_html=True)
 
-    st_autorefresh(interval=15 * 60 * 1000, key="price_refresh")
-
     now = datetime.now(PRAGUE_TZ)
+    next_refresh = next_refresh_time(now)
+
+    # Obnova zarovnaná na xx:01, :16, :31, :46 – interval se přepočítá při každém běhu
+    delay_ms = max(int((next_refresh - now).total_seconds() * 1000), 5000)
+    st_autorefresh(interval=delay_ms, debounce=False, key="price_refresh")
 
     # Header
     col_title, col_time = st.columns([3, 1])
@@ -177,7 +181,7 @@ def main() -> None:
         st.markdown(
             f"<div style='text-align:right; padding-top:12px; color:#9CA3AF; font-size:0.85rem;'>"
             f"Aktualizováno<br><strong style='color:#E5E7EB'>{now.strftime('%H:%M:%S')}</strong>"
-            f" (CET/CEST)</div>",
+            f" (CET/CEST)<br>Další obnova {next_refresh.strftime('%H:%M')}</div>",
             unsafe_allow_html=True,
         )
 
@@ -486,7 +490,15 @@ def show_my_price_tab() -> None:
     current = get_current_price(prices)
 
     # ── Přehled cen ──
-    st.subheader("Přehled cen")
+    slot = (
+        f"{current.time_from:%H:%M}–{current.time_from + timedelta(minutes=15):%H:%M}"
+        if current else None
+    )
+    st.subheader(f"Přehled cen — {slot}" if slot else "Přehled cen")
+    st.caption(
+        f"Ceny platí pro interval {slot or '—'} · aktualizováno {now:%H:%M:%S} · "
+        f"další obnova {next_refresh_time(now):%H:%M}"
+    )
     spot = czk_mwh_to_kwh(current.price_czk) if current else None
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -509,7 +521,7 @@ def show_my_price_tab() -> None:
         st.markdown(
             f"<div style='margin-top:8px; padding:12px 20px; background:{color}20; "
             f"border:1px solid {color}; border-radius:10px; text-align:center; color:{color}; "
-            f"font-weight:700; font-size:1.1rem;'>Teď platí {tariff} — "
+            f"font-weight:700; font-size:1.1rem;'>{slot} platí {tariff} — "
             f"{total:.2f} Kč/kWh</div>",
             unsafe_allow_html=True,
         )

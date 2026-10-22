@@ -1,7 +1,7 @@
 """OTE (Operátor trhu s elektřinou) API klient."""
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -132,3 +132,16 @@ def get_current_price_debug(prices: list[SpotPrice]) -> tuple[SpotPrice | None, 
         if price.time_from <= now_naive <= price.time_to:
             return price, debug_info
     return None, debug_info
+
+
+def next_refresh_time(now: datetime, offset_minutes: int = 1) -> datetime:
+    """Vrátí nejbližší čas obnovy: začátek 15min intervalu + offset (xx:01, :16, :31, :46).
+
+    OTE ceny se mění po čtvrthodinách, obnova chvíli po začátku intervalu
+    zajistí, že se zobrazí cena právě začínajícího intervalu.
+    """
+    slot_start = now.replace(minute=now.minute // 15 * 15, second=0, microsecond=0)
+    candidate = slot_start + timedelta(minutes=offset_minutes)
+    if candidate <= now:
+        candidate += timedelta(minutes=15)
+    return candidate
