@@ -21,6 +21,7 @@ from ote.spot import (
     get_current_price,
     get_current_price_debug,
     next_refresh_time,
+    slot_label,
 )
 
 PRAGUE_TZ = ZoneInfo("Europe/Prague")
@@ -105,7 +106,7 @@ def load_prices_as_df(prices: list[SpotPrice]) -> pd.DataFrame:
     return pd.DataFrame([
         {
             "Čas": p.time_from,
-            "Hodina": p.time_from.strftime("%H:%M"),
+            "Hodina": slot_label(p.time_from),
             "Cena (CZK/MWh)": p.price_czk,
             "Cena (EUR/MWh)": p.price_eur,
         }
@@ -386,7 +387,7 @@ def tariff_df(prices: list[SpotPrice]) -> pd.DataFrame:
     rows = compute_tariff_prices([(p.time_from, p.price_czk) for p in prices])
     return pd.DataFrame([
         {
-            "Hodina": r.time_from.strftime("%H:%M"),
+            "Hodina": slot_label(r.time_from),
             "Spot (Kč/kWh)": r.spot_kwh,
             "Tarif": "NT" if r.is_low_tariff else "VT",
             "Celkem (Kč/kWh)": r.total_kwh,
@@ -437,7 +438,7 @@ def kwh_bar_chart(
     )
     chart: alt.LayerChart | alt.Chart = bars
     if now is not None:
-        slot = f"{now.hour:02d}:{now.minute // 15 * 15:02d}"
+        slot = slot_label(now.replace(minute=now.minute // 15 * 15))
         now_df = pd.DataFrame({"Hodina": [slot], "label": ["Teď"]})
         rule = (
             alt.Chart(now_df)

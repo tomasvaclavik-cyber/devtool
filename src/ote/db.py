@@ -74,7 +74,12 @@ def save_prices(
     """
     init_db(conn)
 
-    # Použij INSERT OR REPLACE pro aktualizaci existujících záznamů
+    # Den se ukládá celý znovu – po opravě časů u změny času nesmí zůstat staré řádky
+    conn.execute("DELETE FROM spot_prices WHERE report_date = ?", (report_date.isoformat(),))
+    # Opakovaná hodina při přechodu na zimní čas (fold=1) by kolidovala s UNIQUE
+    # (report_date, time_from) – v historii zůstává její první (letní) výskyt
+    prices = [p for p in prices if not p.time_from.fold]
+
     cursor = conn.executemany(
         """
         INSERT OR REPLACE INTO spot_prices

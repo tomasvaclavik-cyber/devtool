@@ -1,13 +1,14 @@
 """OTE (Operátor trhu s elektřinou) API klient."""
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 import httpx
 
 # Časové pásmo pro Českou republiku (OTE data jsou v tomto pásmu)
 PRAGUE_TZ = ZoneInfo("Europe/Prague")
+INTERVAL = timedelta(minutes=15)
 
 OTE_BASE_URL = "https://www.ote-cr.cz"
 OTE_CHART_DATA_URL = f"{OTE_BASE_URL}/pw-data/chart-data/01"
@@ -72,10 +73,9 @@ def fetch_spot_prices(report_date: date | None = None) -> tuple[list[SpotPrice],
         data = response.json()
 
     prices = []
-    year = report_date.year
 
     # Data obsahují více dataLine - hledáme "15min price (EUR/MWh)"
-    # x je 15minutový interval (1-96), y je cena
+    # x je 15minutový interval (1-96, při změně času 92 nebo 100), y je cena
     if "data" in data and "dataLine" in data["data"]:
         price_data = None
         for dl in data["data"]["dataLine"]:
@@ -88,12 +88,7 @@ def fetch_spot_prices(report_date: date | None = None) -> tuple[list[SpotPrice],
                 interval = int(point["x"]) - 1  # OTE indexuje od 1
                 price_eur = float(point["y"])
                 price_czk = price_eur * eur_czk_rate
-                # Převod intervalu na hodiny a minuty
-                hour = interval // 4
-                minute = (interval % 4) * 15
-                time_from = datetime(year, report_date.month, report_date.day, hour, minute)
-                minute_to = minute + 14
-                time_to = datetime(year, report_date.month, report_date.day, hour, minute_to, 59)
+                time_from, time_to = interval_times(report_date, interval)
                 prices.append(SpotPrice(
                     time_from=time_from,
                     time_to=time_to,
@@ -104,6 +99,31 @@ def fetch_spot_prices(report_date: date | None = None) -> tuple[list[SpotPrice],
     return prices, eur_czk_rate
 
 
+def interval_times(report_date: date, interval: int) -> tuple[datetime, datetime]:
+    """Vrátí (time_from, time_to) n-tého 15min intervalu dne v pražském čase (naive).
+
+    Počítá se přes UTC, aby seděly dny se změnou času: jarní den má 92 intervalů
+    (po 01:45 následuje 03:00), podzimní 100 (02:00–02:45 je dvakrát, druhý výskyt
+    má ``fold=1``).
+    """
+    day_start = datetime.combine(report_date, time(), PRAGUE_TZ).astimezone(timezone.utc)
+    start = day_start + interval * INTERVAL
+    time_from = start.astimezone(PRAGUE_TZ).replace(tzinfo=None)
+    time_to = (start + INTERVAL - timedelta(seconds=1)).astimezone(PRAGUE_TZ).replace(tzinfo=None)
+    return time_from, time_to
+
+
+def slot_label(dt: datetime) -> str:
+    """Popisek intervalu HH:MM; opakovaná hodina při přechodu na zimní čas se odliší."""
+    return f"{dt:%H:%M} (zimní)" if dt.fold else f"{dt:%H:%M}"
+
+
+def _is_current(price: SpotPrice, now: datetime) -> bool:
+    # Porovnání v UTC – naive časy z OTE jsou pražské, fold rozliší opakovanou hodinu
+    start = price.time_from.replace(tzinfo=PRAGUE_TZ).astimezone(timezone.utc)
+    return start <= now.astimezone(timezone.utc) < start + INTERVAL
+
+
 def get_current_price(prices: list[SpotPrice]) -> SpotPrice | None:
     """Najde aktuální cenu podle času.
 
@@ -111,10 +131,8 @@ def get_current_price(prices: list[SpotPrice]) -> SpotPrice | None:
     jsou v tomto pásmu.
     """
     now = datetime.now(PRAGUE_TZ)
-    # Porovnáváme pouze čas bez timezone info (OTE data nemají timezone)
-    now_naive = now.replace(tzinfo=None)
     for price in prices:
-        if price.time_from <= now_naive <= price.time_to:
+        if _is_current(price, now):
             return price
     return None
 
@@ -126,10 +144,9 @@ def get_current_price_debug(prices: list[SpotPrice]) -> tuple[SpotPrice | None, 
         Tuple (aktuální cena nebo None, debug string s použitým časem)
     """
     now = datetime.now(PRAGUE_TZ)
-    now_naive = now.replace(tzinfo=None)
-    debug_info = f"now={now.isoformat()}, naive={now_naive.isoformat()}"
+    debug_info = f"now={now.isoformat()}, utc={now.astimezone(timezone.utc).isoformat()}"
     for price in prices:
-        if price.time_from <= now_naive <= price.time_to:
+        if _is_current(price, now):
             return price, debug_info
     return None, debug_info
 
