@@ -81,3 +81,19 @@ def compute_tariff_prices(
             total_kwh=total_price_kwh(spot_kwh, low),
         ))
     return result
+
+
+# Odchylka od průměru srovnávacích cen, od které je cena „vysoká" / „nízká"
+LEVEL_TOLERANCE = 0.15
+
+
+def price_level(current: float, references: list[float]) -> str | None:
+    """Zhodnotí cenu vůči průměru srovnávacích cen: „nízká" / „normální" / „vysoká"."""
+    if not references:
+        return None
+    avg = sum(references) / len(references)
+    if current > avg * (1 + LEVEL_TOLERANCE):
+        return "vysoká"
+    if current < avg * (1 - LEVEL_TOLERANCE):
+        return "nízká"
+    return "normální"

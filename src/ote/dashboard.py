@@ -454,6 +454,67 @@ def kwh_bar_chart(
     return chart.properties(height=height)
 
 
+LEVEL_COLORS = {"nízká": "#22C55E", "normální": "#EAB308", "vysoká": "#EF4444"}
+WEEKDAY_SHORT = ["po", "út", "st", "čt", "pá", "so", "ne"]
+
+
+def show_week_comparison(current: SpotPrice, total: float, low: bool) -> None:
+    """Koncová cena teď vs. stejná čtvrthodina (stejný den v týdnu) před 1 a 2 týdny."""
+    from ote.db import get_price_at
+    from ote.tariff import czk_mwh_to_kwh, price_level, total_price_kwh
+
+    conn = get_connection()
+    past = []
+    for weeks in (1, 2):
+        # Stejný lokální čas – přes změnu času se porovnává podle hodin na zdi
+        time_from = current.time_from.replace(fold=0) - timedelta(weeks=weeks)
+        price = get_price_at(conn, time_from)
+        past_total = (
+            total_price_kwh(czk_mwh_to_kwh(price), low) if price is not None else None
+        )
+        past.append((weeks, time_from, past_total))
+    conn.close()
+
+    st.subheader("Srovnání s minulými týdny")
+    cols = st.columns(3)
+    for col, (weeks, time_from, past_total) in zip(cols, past):
+        label = (
+            f"Před {'týdnem' if weeks == 1 else '2 týdny'} "
+            f"({WEEKDAY_SHORT[time_from.weekday()]} {time_from:%d.%m. %H:%M})"
+        )
+        with col:
+            if past_total is None:
+                st.metric(label, "—", help="Pro tento interval nejsou v historii data")
+            else:
+                diff = total - past_total
+                pct = diff / past_total * 100 if past_total else 0.0
+                st.metric(
+                    label, f"{past_total:.2f} Kč/kWh",
+                    delta=f"{diff:+.2f} Kč/kWh ({pct:+.0f} %)",
+                    delta_color="inverse",
+                )
+    level = price_level(total, [t for _, _, t in past if t is not None])
+    with cols[2]:
+        if level:
+            color = LEVEL_COLORS[level]
+            st.markdown(
+                f"<div style='padding:12px 16px; background:{color}20; border:1px solid {color}; "
+                f"border-radius:10px; color:{color}; text-align:center;'>"
+                f"<div style='font-size:0.8rem; opacity:0.8;'>Aktuální cena je vůči minulým "
+                f"týdnům</div><div style='font-weight:700; font-size:1.2rem;'>"
+                f"{level.upper()}</div></div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.metric("Hodnocení", "—", help="Chybí data z minulých týdnů")
+    st.caption(
+        "Koncová cena s DPH a distribucí, stejný den v týdnu a stejná čtvrthodina; "
+        "šipka = o kolik je cena teď vyšší/nižší. "
+        "Starší ceny přepočteny dnešním ceníkem, rozdíl je tedy jen ve spotu. "
+        "Vysoká/nízká = o více než 15 % nad/pod průměrem obou týdnů."
+    )
+
+
 def show_my_price_tab() -> None:
     from ote.tariff import (
         DISTRIBUTION_NT,
@@ -526,6 +587,10 @@ def show_my_price_tab() -> None:
             f"{total:.2f} Kč/kWh</div>",
             unsafe_allow_html=True,
         )
+
+    # ── Srovnání se stejnou čtvrthodinou před 1 a 2 týdny ──
+    if current is not None and spot is not None:
+        show_week_comparison(current, total, low)
 
     # ── Průměr spotu ──
     st.subheader("Průměr spotu")

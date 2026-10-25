@@ -11,6 +11,7 @@ from ote.tariff import (
     high_tariff_price,
     is_low_tariff,
     low_tariff_price,
+    price_level,
     total_price_kwh,
 )
 
@@ -53,3 +54,17 @@ def test_compute_tariff_prices() -> None:
     assert rows[0].is_low_tariff and not rows[1].is_low_tariff
     assert rows[0].spot_kwh == 1.5
     assert rows[1].total_kwh - rows[0].total_kwh == pytest.approx(2.72546 - 0.14097)
+
+
+@pytest.mark.parametrize(
+    ("current", "references", "expected"),
+    [
+        (7.0, [7.0, 7.2], "normální"),
+        (8.5, [7.0, 7.2], "vysoká"),
+        (5.5, [7.0, 7.2], "nízká"),
+        (7.0, [7.0], "normální"),
+        (7.0, [], None),
+    ],
+)
+def test_price_level(current: float, references: list[float], expected: str | None) -> None:
+    assert price_level(current, references) == expected

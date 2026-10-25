@@ -130,6 +130,16 @@ def get_prices_for_date(
     ]
 
 
+def get_price_at(conn: sqlite3.Connection, time_from: datetime) -> float | None:
+    """Vrátí spotovou cenu (CZK/MWh) intervalu začínajícího v daný čas, pokud je v DB."""
+    init_db(conn)
+    row = conn.execute(
+        "SELECT price_czk FROM spot_prices WHERE time_from = ?",
+        (time_from.replace(fold=0).isoformat(),),
+    ).fetchone()
+    return row["price_czk"] if row else None
+
+
 def get_available_dates(conn: sqlite3.Connection) -> list[date]:
     """Vrátí seznam dostupných dat v databázi."""
     init_db(conn)
