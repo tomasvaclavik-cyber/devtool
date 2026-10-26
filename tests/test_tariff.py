@@ -12,6 +12,7 @@ from ote.tariff import (
     is_low_tariff,
     low_tariff_price,
     price_level,
+    sell_price_kwh,
     total_price_kwh,
 )
 
@@ -68,3 +69,10 @@ def test_compute_tariff_prices() -> None:
 )
 def test_price_level(current: float, references: list[float], expected: str | None) -> None:
     assert price_level(current, references) == expected
+
+
+def test_sell_price() -> None:
+    # Spot 2,00 Kč/kWh bez DPH − 499 Kč/MWh s DPH za služby obchodu
+    assert sell_price_kwh(2.0) == pytest.approx(1.501)
+    # Při záporném spotu se za dodávku do sítě platí
+    assert sell_price_kwh(-0.1) == pytest.approx(-0.599)

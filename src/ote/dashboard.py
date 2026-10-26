@@ -99,8 +99,17 @@ PRICE_STOPS = [
 ]
 
 
-def _gradient() -> alt.Gradient:
-    return alt.Gradient(gradient="linear", stops=PRICE_STOPS, x1=1, x2=1, y1=1, y2=0)
+# Výkup: čím výš, tím líp – nahoře zelená, dole (záporná cena) červená
+SELL_STOPS = [
+    alt.GradientStop(color=GRID, offset=0),
+    alt.GradientStop(color=READOUT, offset=0.3),
+    alt.GradientStop(color=SOLAR, offset=0.55),
+    alt.GradientStop(color=BATTERY, offset=1),
+]
+
+
+def _gradient(stops: list[alt.GradientStop] = PRICE_STOPS) -> alt.Gradient:
+    return alt.Gradient(gradient="linear", stops=stops, x1=1, x2=1, y1=1, y2=0)
 
 
 def slot_key(day: date, time_from: datetime) -> str:
@@ -156,6 +165,7 @@ def gradient_line_chart(
     nt_bands: bool = False,
     y_format: str = ",.0f",
     height: int = 300,
+    stops: list[alt.GradientStop] = PRICE_STOPS,
 ) -> alt.LayerChart:
     """Schodová čára s barevným přechodem podle výšky ceny (styl SunnyHome).
 
@@ -181,19 +191,22 @@ def gradient_line_chart(
                 tooltip=tooltip)
     )
     area = (
-        alt.Chart(df).mark_area(interpolate="step-after", opacity=0.18, color=_gradient())
+        alt.Chart(df).mark_area(interpolate="step-after", opacity=0.18, color=_gradient(stops))
         .encode(x=x, y=y)
     )
     glow = (
         alt.Chart(df).mark_line(interpolate="step-after", strokeWidth=7, opacity=0.18,
-                                color=_gradient())
+                                color=_gradient(stops))
         .encode(x=x, y=y)
     )
     line = (
-        alt.Chart(df).mark_line(interpolate="step-after", strokeWidth=2.2, color=_gradient())
+        alt.Chart(df).mark_line(interpolate="step-after", strokeWidth=2.2, color=_gradient(stops))
         .encode(x=x, y=y)
     )
     layers = [bands, area, glow, line, *_day_layers(days), *_now_layers(now)]
+    if df[value_col].min() < 0:
+        layers.insert(1, alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(
+            color=INK_MUTED, strokeWidth=1, opacity=0.6).encode(y="y:Q"))
     return alt.layer(*layers).properties(height=height, width="container")
 
 
@@ -441,6 +454,7 @@ def show_overview_page() -> None:
         VAT,
         compute_tariff_prices,
         is_low_tariff,
+        sell_price_kwh,
     )
 
     now = datetime.now(PRAGUE_TZ)
@@ -470,6 +484,7 @@ def show_overview_page() -> None:
                 "Koncová cena": r.total_kwh,
                 "Spot s DPH": r.spot_kwh * VAT,
                 "Distribuce": DISTRIBUTION_NT if r.is_low_tariff else DISTRIBUTION_VT,
+                "Výkup": sell_price_kwh(r.spot_kwh),
             })
     df = pd.DataFrame(rows)
 
@@ -493,12 +508,14 @@ def show_overview_page() -> None:
         period = "Dnes a zítra" if tomorrow_prices else "Dnes"
         with card("Průběh cen", "Koncová cena, spot s DPH a distribuce v Kč/kWh",
                   icon="line", tone="accent", aside=pill(period, "muted")):
-            series = {"Spot s DPH": SOLAR, "Koncová cena": HOME, "Distribuce": GRID}
+            series = {"Spot s DPH": SOLAR, "Koncová cena": HOME, "Distribuce": GRID,
+                      "Výkup": BATTERY}
             show_chart(multi_line_chart(df, series, "Kč/kWh", now=now, height=300))
             now_slot = slot_key(today, now.replace(minute=now.minute // 15 * 15))
             now_row = df[df["Slot"] == now_slot]
             table_rows = []
-            notes = {"Spot s DPH": "trh", "Koncová cena": "co platím", "Distribuce": "NT / VT"}
+            notes = {"Spot s DPH": "trh", "Koncová cena": "co platím", "Distribuce": "NT / VT",
+                     "Výkup": "co dostanu"}
             for col, color in series.items():
                 peak = df.loc[df[col].idxmax()]
                 table_rows.append({
@@ -508,6 +525,8 @@ def show_overview_page() -> None:
                     "peak": f"{peak[col]:.2f} Kč", "peak_time": peak["Čas"],
                 })
             st.html(readout_table(table_rows, ("Teď", "Nejvyšší")))
+
+    show_sell_card(now, prices, tomorrow_prices, current, height=240)
 
     show_three_hour_weather_card()
 
@@ -814,6 +833,67 @@ def show_final_price_card(
         st.caption("Zeleně podbarvený je nízký tarif (NT), oranžová čárkovaná čára = teď.")
 
 
+def show_sell_card(
+    now: datetime, prices: list[SpotPrice], tomorrow_prices: list[SpotPrice],
+    current: SpotPrice | None, height: int = 280,
+) -> None:
+    """Karta „Prodej": za kolik teď prodávám do sítě (spot bez DPH − poplatek Electree)."""
+    from ote.tariff import SELL_FEE, czk_mwh_to_kwh, sell_price_kwh
+
+    days = [(now.date(), prices)]
+    if tomorrow_prices:
+        days.append((now.date() + timedelta(days=1), tomorrow_prices))
+    df = pd.DataFrame([
+        {
+            "Slot": slot_key(day, p.time_from),
+            "Čas": f"{day:%d.%m.} {p.time_from:%H:%M}",
+            "Spot (Kč/kWh)": czk_mwh_to_kwh(p.price_czk),
+            "Výkup (Kč/kWh)": sell_price_kwh(czk_mwh_to_kwh(p.price_czk)),
+        }
+        for day, day_prices in days for p in day_prices
+    ])
+    sells = df["Výkup (Kč/kWh)"]
+    best = df.loc[sells.idxmax()]
+    negative = int((sells < 0).sum())
+
+    period = "Dnes a zítra" if tomorrow_prices else "Dnes"
+    with card("Prodej", f"Výkup do sítě · spot bez DPH − {SELL_FEE * 1000:.0f} Kč/MWh Electree",
+              icon="sun", tone="battery", aside=pill(period, "muted")):
+        if current is not None:
+            spot = czk_mwh_to_kwh(current.price_czk)
+            sell = sell_price_kwh(spot)
+            # Barva podle hladiny výkupu: nahoře zelená, záporná cena červená
+            q30, q70 = sells.quantile([0.30, 0.70])
+            badge = GRID if sell < 0 else BATTERY if sell >= q70 else SOLAR if sell >= q30 \
+                else READOUT
+            note = ("teď se prodávat nevyplatí – za dodávku do sítě se platí" if sell < 0
+                    else f"spot {spot:.2f} − poplatek {SELL_FEE:.3f} Kč/kWh")
+            st.html(
+                f"<div style='margin-top:6px;color:{INK_MUTED};font-size:14px'>Teď prodávám za"
+                f"</div><div style='display:inline-block;margin:6px 0;padding:2px 18px;"
+                f"background:{badge};color:#0b1220;border-radius:12px;font-size:2.6rem;"
+                f"font-weight:700;line-height:1.25;box-shadow:0 0 30px {badge}55'>"
+                f"{sell:.2f} Kč/kWh</div>"
+                f"<div style='color:{INK_MUTED};font-size:14px'>{note}</div>"
+            )
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Nejvíc", f"{best['Výkup (Kč/kWh)']:.2f} Kč/kWh",
+                  help=f"Čtvrthodina {best['Čas']}")
+        c2.metric("Nejméně", f"{sells.min():.2f} Kč/kWh",
+                  help=f"Čtvrthodina {df.loc[sells.idxmin(), 'Čas']}")
+        c3.metric("Záporný výkup", f"{negative} × 15 min",
+                  help="Čtvrthodiny, kdy by se za dodávku do sítě platilo")
+        show_chart(gradient_line_chart(
+            df, "Výkup (Kč/kWh)", "Kč/kWh",
+            tooltip=[alt.Tooltip("Čas:N", title="Čas"),
+                     alt.Tooltip("Výkup (Kč/kWh):Q", title="Výkup", format=",.2f"),
+                     alt.Tooltip("Spot (Kč/kWh):Q", title="Spot bez DPH", format=",.2f")],
+            now=now, y_format=",.1f", height=height, stops=SELL_STOPS,
+        ))
+        st.caption(f"Nejlépe se prodává {best['Čas']}. Poplatek Electree za služby obchodu "
+                   f"{SELL_FEE * 1000:.0f} Kč/MWh s DPH se odečítá od spotu bez DPH.")
+
+
 def show_my_price_tab() -> None:
     from ote.tariff import (
         DISTRIBUTION_NT,
@@ -854,6 +934,7 @@ def show_my_price_tab() -> None:
 
     # ── Karta s koncovou cenou NT/VT ──
     show_final_price_card(now, prices, tomorrow_prices, current)
+    show_sell_card(now, prices, tomorrow_prices, current)
 
     # ── Přehled cen ──
     slot = (

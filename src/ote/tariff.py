@@ -18,6 +18,10 @@ DISTRIBUTION_NT = 0.14097  # D25d, ČEZ – nízký tarif
 SYSTEM_SERVICES = 0.19873
 ENERGY_TAX = 0.03424
 
+# Výkup (prodej do sítě): spot bez DPH minus služby obchodu Electree
+# 499 Kč/MWh s DPH (412,39 Kč bez DPH) = 0,499 Kč/kWh
+SELL_FEE = 0.499
+
 # Násobek pro dlaždici „Bojler" (input_number × 2,4 Kč)
 BOILER_MULTIPLIER = 2.4
 
@@ -44,6 +48,11 @@ def total_price_kwh(spot_kwh: float, low_tariff: bool) -> float:
     """Koncová cena v Kč/kWh pro spotovou cenu v Kč/kWh (bez DPH)."""
     distribution = DISTRIBUTION_NT if low_tariff else DISTRIBUTION_VT
     return spot_kwh * VAT + ELECTREE_FEE + distribution + SYSTEM_SERVICES + ENERGY_TAX
+
+
+def sell_price_kwh(spot_kwh: float) -> float:
+    """Výkupní cena v Kč/kWh: spot bez DPH minus poplatek Electree za služby obchodu."""
+    return spot_kwh - SELL_FEE
 
 
 def low_tariff_price(spot_kwh: float) -> float:
