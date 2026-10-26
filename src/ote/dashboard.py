@@ -405,7 +405,8 @@ def price_flow_html(spot_kwh: float, low: bool, now: datetime) -> str:
       .pf-c1 {{ grid-area:2/3; }} .pf-c2 {{ grid-area:4/3; }}
       .pf-c3 {{ grid-area:3/2; }} .pf-c4 {{ grid-area:3/4; }}
       .pf-hub img {{ margin:0 auto; }}
-      @media (max-width: 520px) {{
+      .pf-wrap {{ container-type:inline-size; }}
+      @container (max-width: 480px) {{
         .pf {{ grid-template-columns:1fr 12px auto 12px 1fr; grid-template-rows:auto 18px auto
                18px auto; }}
         .pf-node {{ width:86px; height:86px; border-width:3px; }}
@@ -416,7 +417,7 @@ def price_flow_html(spot_kwh: float, low: bool, now: datetime) -> str:
         .pf-hub b {{ font-size:20px; }}
       }}
     </style>
-    <div class='pf'>
+    <div class='pf-wrap'><div class='pf'>
       {node('pf-top', SOLAR, 'zap', spot_vat, 'Spot s DPH', f'{spot_kwh:.2f} bez DPH')}
       <div class='pf-v pf-c1'></div>
       {node('pf-left', tariff_color, 'clock', distribution, 'Distribuce ' + ('NT' if low else 'VT'),
@@ -429,7 +430,7 @@ def price_flow_html(spot_kwh: float, low: bool, now: datetime) -> str:
       <div class='pf-v pf-c2'></div>
       {node('pf-bottom', ACCENT_INK, 'pole', spot_vat + distribution, 'Energie + síť',
             'bez poplatků')}
-    </div>
+    </div></div>
     """
 
 

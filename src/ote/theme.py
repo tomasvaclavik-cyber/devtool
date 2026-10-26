@@ -221,6 +221,10 @@ CSS = f"""
       background: {SURFACE}; border: 1px solid {BORDER} !important; border-radius: 14px !important;
       box-shadow: inset 0 1px 0 #ffffff0a, 0 10px 30px #02061273; padding: 20px !important;
   }}
+  /* Sloupce s kartami se při nedostatku místa zalomí pod sebe */
+  [data-testid="stHorizontalBlock"]:has([class*="st-key-card-"]) {{ flex-wrap:wrap; }}
+  [data-testid="stHorizontalBlock"]:has([class*="st-key-card-"]) > [data-testid="stColumn"] {{
+      min-width:min(100%, 400px); }}
   [class*="-top-solar"] {{ border-top: 3px solid {SOLAR} !important; }}
   [class*="-top-accent"] {{ border-top: 3px solid {ACCENT} !important; }}
   [class*="-top-home"] {{ border-top: 3px solid {HOME} !important; }}
@@ -259,9 +263,9 @@ CSS = f"""
   .sh-rt-name em {{ font-style:normal; color:{INK_MUTED}; font-size:12px; font-weight:400; }}
   .sh-rt small {{ color:{INK_MUTED}; margin-left:8px; font-size:12px; }}
 
-  @media (max-width: 520px) {{
-    .sh-rt {{ font-size:12.5px; }}
-    .sh-rt-row {{ grid-template-columns:minmax(0,1.3fr) 1fr 1fr; gap:6px; }}
+  .sh-rt {{ container-type:inline-size; }}
+  @container (max-width: 440px) {{
+    .sh-rt-row {{ font-size:12.5px; grid-template-columns:minmax(0,1.3fr) 1fr 1fr; gap:6px; }}
     .sh-rt-name em, .sh-rt small {{ display:none; }}
     .sh-rt-name {{ gap:6px; }}
   }}
