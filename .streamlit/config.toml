@@ -1,0 +1,32 @@
+# Vzhled ve stylu SunnyHome (tokeny převzaté ze sunnyhome.cloud)
+[theme]
+base = "dark"
+primaryColor = "#3b82f6"
+backgroundColor = "#0b1220"
+secondaryBackgroundColor = "#17223a"
+textColor = "#eef2f8"
+linkColor = "#6ea8ff"
+borderColor = "#1f2b45"
+dataframeBorderColor = "#1f2b45"
+dataframeHeaderBackgroundColor = "#17223a"
+showWidgetBorder = true
+showSidebarBorder = true
+baseRadius = "10px"
+buttonRadius = "10px"
+font = "Poppins:https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap"
+headingFont = "Poppins:https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap"
+baseFontSize = 14
+metricValueFontSize = "1.2rem"
+metricValueFontWeight = 600
+greenColor = "#22c55e"
+redColor = "#f43f5e"
+yellowColor = "#fbbf24"
+blueColor = "#3b82f6"
+violetColor = "#a855f7"
+orangeColor = "#f5a524"
+chartCategoricalColors = ["#3b82f6", "#fbbf24", "#a855f7", "#f43f5e", "#22c55e", "#f5a524", "#6ea8ff"]
+
+[theme.sidebar]
+backgroundColor = "#0e1626"
+secondaryBackgroundColor = "#111a2e"
+borderColor = "#1f2b45"

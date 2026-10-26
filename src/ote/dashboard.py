@@ -1,4 +1,4 @@
-"""Streamlit dashboard pro vizualizaci spotových cen."""
+"""Streamlit dashboard pro vizualizaci spotových cen (vzhled ve stylu SunnyHome)."""
 
 import base64
 from datetime import date, datetime, timedelta
@@ -24,83 +24,56 @@ from ote.spot import (
     next_refresh_time,
     slot_label,
 )
+from ote.theme import (
+    ACCENT,
+    ACCENT_INK,
+    BATTERY,
+    BORDER,
+    GRID,
+    HOME,
+    INK_MUTED,
+    LEVEL_RANGE,
+    READOUT,
+    SOLAR,
+    SURFACE_RAISED,
+    card,
+    chip,
+    icon_img,
+    inject_css,
+    page_header,
+    pill,
+    rank_list,
+    readout_table,
+    reset_cards,
+    show_chart,
+    status_box,
+)
 
 PRAGUE_TZ = ZoneInfo("Europe/Prague")
 
 # Barevná škála podle cenové hladiny
 PRICE_COLORS = {
-    "velmi levná": "#22C55E",
-    "levná": "#86EFAC",
-    "normální": "#EAB308",
-    "drahá": "#F97316",
-    "velmi drahá": "#EF4444",
+    "velmi levná": LEVEL_RANGE[0],
+    "levná": LEVEL_RANGE[1],
+    "normální": LEVEL_RANGE[2],
+    "drahá": LEVEL_RANGE[3],
+    "velmi drahá": LEVEL_RANGE[4],
     "nedostatek dat": "#6B7280",
 }
-
-CSS = """
-<style>
-    /* Globální font a spacing */
-    [data-testid="stAppViewContainer"] { font-family: 'Inter', sans-serif; }
-
-    /* Nadpis stránky */
-    h1 { font-size: 2rem !important; font-weight: 700 !important; letter-spacing: -0.5px; }
-    h2 { font-size: 1.25rem !important; font-weight: 600 !important; color: #E5E7EB; }
-    h3 { font-size: 1rem !important; font-weight: 600 !important; color: #9CA3AF; text-transform: uppercase; letter-spacing: 0.5px; }
-
-    /* Metric karty */
-    [data-testid="metric-container"] {
-        background: #1F2937;
-        border: 1px solid #374151;
-        border-radius: 12px;
-        padding: 16px 20px;
-    }
-    [data-testid="metric-container"] [data-testid="stMetricLabel"] {
-        font-size: 0.75rem;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        color: #9CA3AF;
-    }
-    [data-testid="metric-container"] [data-testid="stMetricValue"] {
-        font-size: 1rem !important;
-        font-weight: 700 !important;
-        color: #F9FAFB;
-    }
-    [data-testid="metric-container"] [data-testid="stMetricValue"] > div {
-        font-size: 1rem !important;
-        font-weight: 700 !important;
-    }
-    [data-testid="stMetricValue"] {
-        font-size: 1rem !important;
-        font-weight: 700 !important;
-    }
-
-    /* Divider */
-    hr { border-color: #374151 !important; margin: 1.5rem 0 !important; }
-
-    /* Sidebar */
-    [data-testid="stSidebar"] { background: #111827; }
-    [data-testid="stSidebar"] h2 { color: #D1D5DB; }
-
-    /* Expander */
-    [data-testid="stExpander"] { border: 1px solid #374151 !important; border-radius: 8px; }
-
-    /* Tabs */
-    [data-testid="stTabs"] [role="tab"] { font-weight: 500; }
-</style>
-"""
+LEVEL_NAMES = ["Velmi levná", "Levná", "Normální", "Drahá", "Velmi drahá"]
 
 
 def price_color(price: float, p10: float, p30: float, p70: float, p90: float) -> str:
     if price <= p10:
-        return "#22C55E"
+        return LEVEL_RANGE[0]
     elif price <= p30:
-        return "#86EFAC"
+        return LEVEL_RANGE[1]
     elif price <= p70:
-        return "#EAB308"
+        return LEVEL_RANGE[2]
     elif price <= p90:
-        return "#F97316"
+        return LEVEL_RANGE[3]
     else:
-        return "#EF4444"
+        return LEVEL_RANGE[4]
 
 
 def load_prices_as_df(prices: list[SpotPrice]) -> pd.DataFrame:
@@ -115,58 +88,232 @@ def load_prices_as_df(prices: list[SpotPrice]) -> pd.DataFrame:
     ])
 
 
-def colored_bar_chart(df: pd.DataFrame, height: int = 400) -> alt.Chart:
-    """Graf s barevnými sloupci podle cenové hladiny."""
-    vals = df["Cena (CZK/MWh)"]
-    p10, p30, p70, p90 = (
-        vals.quantile(0.10), vals.quantile(0.30),
-        vals.quantile(0.70), vals.quantile(0.90),
-    )
+# ─── Grafy ───────────────────────────────────────────────────────────────────
 
+# Barvy čáry odspodu nahoru (gradient se roztáhne mezi min a max)
+PRICE_STOPS = [
+    alt.GradientStop(color=BATTERY, offset=0),
+    alt.GradientStop(color=SOLAR, offset=0.45),
+    alt.GradientStop(color=READOUT, offset=0.7),
+    alt.GradientStop(color=GRID, offset=1),
+]
+
+
+def _gradient() -> alt.Gradient:
+    return alt.Gradient(gradient="linear", stops=PRICE_STOPS, x1=1, x2=1, y1=1, y2=0)
+
+
+def slot_key(day: date, time_from: datetime) -> str:
+    """Klíč kategorické osy „dd.mm. HH:MM" (temporal osa se ve Streamlitu vykreslí prázdná)."""
+    return f"{day:%d.%m.} {slot_label(time_from)}"
+
+
+def slot_axis(slots: pd.Series, every: int = 3) -> alt.Axis:
+    """Osa jen s celými hodinami dělitelnými `every` (klíč „dd.mm. HH:MM") – popisky i mřížka."""
+    values = [s for s in slots if s[10:12] == "00" and int(s[7:9]) % every == 0]
+    return alt.Axis(values=values, labelAngle=0, labelOverlap=False,
+                    labelExpr="substring(datum.value, 7, 12)")
+
+
+def _now_layers(now: datetime | None) -> list[alt.Chart]:
+    if now is None:
+        return []
+    now_slot = slot_key(now.date(), now.replace(minute=now.minute // 15 * 15))
+    return [
+        alt.Chart(pd.DataFrame({"Slot": [now_slot]}))
+        .mark_rule(color=READOUT, strokeDash=[4, 4], strokeWidth=1.5)
+        .encode(x=alt.X("Slot:N", sort=None))
+    ]
+
+
+def _day_keys(slots: pd.Series) -> list[str]:
+    """Dny v grafu jako „dd.mm." v pořadí, v jakém jdou za sebou."""
+    return list(dict.fromkeys(s[:6] for s in slots))
+
+
+def _day_layers(day_keys: list[str]) -> list[alt.Chart]:
+    if len(day_keys) < 2:
+        return []
+    today = date.today()
+    names = {f"{today:%d.%m.}": "dnes", f"{today + timedelta(days=1):%d.%m.}": "zítra"}
+    day_df = pd.DataFrame([
+        {"Slot": f"{key} 00:00", "label": names.get(key, key)} for key in day_keys
+    ])
+    return [
+        alt.Chart(day_df.iloc[1:]).mark_rule(color="#334155", strokeWidth=1)
+        .encode(x=alt.X("Slot:N", sort=None)),
+        alt.Chart(day_df).mark_text(align="left", dx=5, color=INK_MUTED, fontSize=11)
+        .encode(x=alt.X("Slot:N", sort=None), y=alt.value(8), text="label:N"),
+    ]
+
+
+def gradient_line_chart(
+    df: pd.DataFrame,
+    value_col: str,
+    y_title: str,
+    tooltip: list[alt.Tooltip],
+    now: datetime | None = None,
+    nt_bands: bool = False,
+    y_format: str = ",.0f",
+    height: int = 300,
+) -> alt.LayerChart:
+    """Schodová čára s barevným přechodem podle výšky ceny (styl SunnyHome).
+
+    df musí mít sloupec „Slot" (klíč „dd.mm. HH:MM"), volitelně „Tarif" pro pásy NT.
+    """
     df = df.copy()
-    df["Hladina"] = df["Cena (CZK/MWh)"].apply(lambda v: (
-        "Velmi levná" if v <= p10 else
-        "Levná" if v <= p30 else
-        "Normální" if v <= p70 else
-        "Drahá" if v <= p90 else
-        "Velmi drahá"
-    ))
+    df["band_lo"] = min(0.0, df[value_col].min())
+    df["band_hi"] = df[value_col].max()
+    days = _day_keys(df["Slot"])
+    x = alt.X("Slot:N", title=None, sort=None, axis=slot_axis(df["Slot"], 3 if len(days) == 1 else 6))
+    y = alt.Y(f"{value_col}:Q", title=y_title, axis=alt.Axis(format=y_format))
 
-    return (
-        alt.Chart(df)
-        .mark_bar()
-        .encode(
-            x=alt.X("Hodina:N", title="Čas", sort=None,
-                    axis=alt.Axis(labelAngle=-45, labelFontSize=11)),
-            y=alt.Y("Cena (CZK/MWh):Q", title="CZK/MWh",
-                    axis=alt.Axis(format=",.0f")),
-            color=alt.Color(
-                "Hladina:N",
-                scale=alt.Scale(
-                    domain=["Velmi levná", "Levná", "Normální", "Drahá", "Velmi drahá"],
-                    range=["#22C55E", "#86EFAC", "#EAB308", "#F97316", "#EF4444"],
-                ),
-                legend=alt.Legend(title="Cenová hladina", orient="bottom"),
-            ),
-            tooltip=[
-                alt.Tooltip("Hodina:N", title="Čas"),
-                alt.Tooltip("Cena (CZK/MWh):Q", title="CZK/MWh", format=",.0f"),
-                alt.Tooltip("Cena (EUR/MWh):Q", title="EUR/MWh", format=",.2f"),
-                alt.Tooltip("Hladina:N", title="Hladina"),
-            ],
-        )
-        .properties(height=height)
-        .interactive()
+    # Neviditelné sloupce přes celou výšku nesou tooltip, NT je podbarvený
+    if nt_bands and "Tarif" in df:
+        opacity = alt.condition("datum.Tarif == 'NT'", alt.value(0.10), alt.value(0.001))
+        band_color = alt.value(BATTERY)
+    else:
+        opacity = alt.value(0.001)
+        band_color = alt.value(ACCENT)
+    bands = (
+        alt.Chart(df).mark_bar(width={"band": 1})
+        .encode(x=x, y="band_lo:Q", y2="band_hi:Q", color=band_color, opacity=opacity,
+                tooltip=tooltip)
     )
+    area = (
+        alt.Chart(df).mark_area(interpolate="step-after", opacity=0.18, color=_gradient())
+        .encode(x=x, y=y)
+    )
+    glow = (
+        alt.Chart(df).mark_line(interpolate="step-after", strokeWidth=7, opacity=0.18,
+                                color=_gradient())
+        .encode(x=x, y=y)
+    )
+    line = (
+        alt.Chart(df).mark_line(interpolate="step-after", strokeWidth=2.2, color=_gradient())
+        .encode(x=x, y=y)
+    )
+    layers = [bands, area, glow, line, *_day_layers(days), *_now_layers(now)]
+    return alt.layer(*layers).properties(height=height, width="container")
+
+
+def multi_line_chart(
+    df: pd.DataFrame,
+    series: dict[str, str],
+    y_title: str,
+    now: datetime | None = None,
+    y_format: str = ",.2f",
+    height: int = 300,
+) -> alt.LayerChart:
+    """Více schodových čar se září (jako graf „Dnešní výkon" v SunnyHome).
+
+    df: sloupec „Slot" + jeden sloupec na sérii; series = {sloupec: barva}.
+    """
+    long = df.melt(id_vars=["Slot"], value_vars=list(series), var_name="Série",
+                   value_name="Hodnota")
+    days = _day_keys(df["Slot"])
+    x = alt.X("Slot:N", title=None, sort=None, axis=slot_axis(df["Slot"], 3 if len(days) == 1 else 6))
+    y = alt.Y("Hodnota:Q", title=y_title, axis=alt.Axis(format=y_format))
+    color = alt.Color("Série:N", scale=alt.Scale(domain=list(series), range=list(series.values())),
+                      legend=None)
+    glow = (
+        alt.Chart(long).mark_line(interpolate="step-after", strokeWidth=7, opacity=0.16)
+        .encode(x=x, y=y, color=color)
+    )
+    line = (
+        alt.Chart(long).mark_line(interpolate="step-after", strokeWidth=2)
+        .encode(x=x, y=y, color=color)
+    )
+    # Neviditelné sloupce přes celou výšku nesou tooltip se všemi sériemi
+    hover_df = df.assign(band_lo=min(0.0, long["Hodnota"].min()), band_hi=long["Hodnota"].max())
+    hover = (
+        alt.Chart(hover_df).mark_bar(width={"band": 1}, opacity=0.001)
+        .encode(
+            x=x, y="band_lo:Q", y2="band_hi:Q",
+            tooltip=[alt.Tooltip("Slot:N", title="Čas"),
+                     *[alt.Tooltip(f"{col}:Q", format=y_format) for col in series]],
+        )
+    )
+    return alt.layer(glow, line, *_day_layers(days), *_now_layers(now), hover).properties(
+        height=height, width="container",
+    )
+
+
+def spot_price_chart(
+    df: pd.DataFrame, day: date, now: datetime | None = None, height: int = 340,
+) -> alt.LayerChart:
+    """Průběh spotové ceny jednoho dne v CZK/MWh (dříve barevné sloupce)."""
+    vals = df["Cena (CZK/MWh)"]
+    p10, p30, p70, p90 = (vals.quantile(q) for q in (0.10, 0.30, 0.70, 0.90))
+    df = df.assign(
+        Slot=[slot_key(day, t) for t in df["Čas"]],
+        Hladina=[
+            LEVEL_NAMES[0] if v <= p10 else LEVEL_NAMES[1] if v <= p30 else
+            LEVEL_NAMES[2] if v <= p70 else LEVEL_NAMES[3] if v <= p90 else LEVEL_NAMES[4]
+            for v in vals
+        ],
+    )
+    show_now = now if now is not None and now.date() == day else None
+    return gradient_line_chart(
+        df, "Cena (CZK/MWh)", "CZK/MWh",
+        tooltip=[
+            alt.Tooltip("Hodina:N", title="Čas"),
+            alt.Tooltip("Cena (CZK/MWh):Q", title="CZK/MWh", format=",.0f"),
+            alt.Tooltip("Cena (EUR/MWh):Q", title="EUR/MWh", format=",.2f"),
+            alt.Tooltip("Hladina:N", title="Hladina"),
+        ],
+        now=show_now, height=height,
+    )
+
+
+def level_legend() -> str:
+    return "".join(
+        f"<span style='display:inline-flex;align-items:center;gap:6px;margin-right:14px;"
+        f"color:{INK_MUTED};font-size:12px'><i style='width:14px;height:4px;border-radius:4px;"
+        f"background:{c}'></i>{n}</span>"
+        for n, c in zip(LEVEL_NAMES, LEVEL_RANGE)
+    )
+
+
+# ─── Aplikace ────────────────────────────────────────────────────────────────
+
+PAGES = [
+    # (funkce, titulek, ikona, url, podtitul)
+    ("show_overview_page", "Přehled", ":material/dashboard:", "prehled",
+     "Koncová cena, spot a počasí na jednom místě"),
+    ("show_prices_tab", "Aktuální ceny", ":material/bolt:", "ceny",
+     "Spotové ceny OTE po 15 minutách"),
+    ("show_my_price_tab", "Moje cena", ":material/home:", "moje-cena",
+     "Koncová cena podle tarifu Electree + ČEZ D25d"),
+    ("show_trend_tab", "Vývoj cen", ":material/show_chart:", "vyvoj",
+     "Měsíční průměry spotu"),
+    ("show_analysis_tab", "Analýza", ":material/insights:", "analyza",
+     "Vzorce, negativní ceny a trendy"),
+    ("show_profiles_tab", "Profily & riziko", ":material/shield:", "profily",
+     "Benchmark, spotřebitelské profily a volatilita"),
+    ("show_forecast_tab", "Predikce", ":material/auto_awesome:", "predikce",
+     "Zítřejší ceny a statistická prognóza"),
+    ("show_weather_tab", "Počasí", ":material/partly_cloudy_day:", "pocasi",
+     "Předpověď pro Kravaře a vliv na ceny"),
+]
+
+LOGO_SVG = f"""<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 240 48'>
+<rect x='1' y='5' width='38' height='38' rx='10' fill='#0e1626' stroke='{BORDER}'/>
+<g fill='none' stroke='{SOLAR}' stroke-width='2.4' stroke-linecap='round'>
+<path d='M11 31a9 9 0 0 1 18 0'/><path d='M20 12v4M10 16l2.6 2.6M30 16l-2.6 2.6M8 26h3M29 26h3'/>
+<path d='M12 36h16'/></g>
+<text x='50' y='24' fill='#eef2f8' font-family='Poppins,Segoe UI,sans-serif' font-size='18'
+ font-weight='600'>Spot Home</text>
+<text x='50' y='40' fill='{INK_MUTED}' font-family='Poppins,Segoe UI,sans-serif'
+ font-size='10.5'>Ceny elektřiny OTE · Kravaře</text></svg>"""
 
 
 def main() -> None:
-    st.set_page_config(
-        page_title="OTE Spotové ceny",
-        page_icon="⚡",
-        layout="wide",
-    )
-    st.markdown(CSS, unsafe_allow_html=True)
+    st.set_page_config(page_title="OTE Spotové ceny", page_icon="⚡", layout="wide")
+    inject_css()
+    reset_cards()
+    logo = "data:image/svg+xml;base64," + base64.b64encode(LOGO_SVG.encode()).decode()
+    st.logo(logo, size="large")
 
     now = datetime.now(PRAGUE_TZ)
     next_refresh = next_refresh_time(now)
@@ -175,49 +322,214 @@ def main() -> None:
     delay_ms = max(int((next_refresh - now).total_seconds() * 1000), 5000)
     st_autorefresh(interval=delay_ms, debounce=False, key="price_refresh")
 
-    # Header
-    col_title, col_time = st.columns([3, 1])
-    with col_title:
-        st.title("⚡ OTE Spotové ceny elektřiny")
-    with col_time:
-        st.markdown(
-            f"<div style='text-align:right; padding-top:12px; color:#9CA3AF; font-size:0.85rem;'>"
-            f"Aktualizováno<br><strong style='color:#E5E7EB'>{now.strftime('%H:%M:%S')}</strong>"
-            f" (CET/CEST)<br>Další obnova {next_refresh.strftime('%H:%M')}</div>",
-            unsafe_allow_html=True,
+    pages = {
+        title: st.Page(globals()[func], title=title, icon=icon, url_path=url, default=i == 0)
+        for i, (func, title, icon, url, _) in enumerate(PAGES)
+    }
+    nav = st.navigation(list(pages.values()), position="sidebar")
+    subtitle = next(sub for _, title, *_, sub in PAGES if title == nav.title)
+    page_header(
+        nav.title, subtitle,
+        chip(f"Aktualizováno {now:%H:%M:%S} · další obnova {next_refresh:%H:%M}", "clock"),
+    )
+    nav.run()
+
+
+# ─── Přehled ─────────────────────────────────────────────────────────────────
+
+def next_tariff_change(now: datetime) -> datetime:
+    """Čas nejbližší změny NT ↔ VT."""
+    from ote.tariff import is_low_tariff
+
+    low = is_low_tariff(now.hour)
+    t = now.replace(minute=0, second=0, microsecond=0)
+    for _ in range(48):
+        t += timedelta(hours=1)
+        if is_low_tariff(t.hour) != low:
+            return t
+    return t
+
+
+def price_flow_html(spot_kwh: float, low: bool, now: datetime) -> str:
+    """Složení koncové ceny jako diagram toku (obdoba „Aktuální tok energie")."""
+    from ote.tariff import (
+        DISTRIBUTION_NT,
+        DISTRIBUTION_VT,
+        ELECTREE_FEE,
+        ENERGY_TAX,
+        SYSTEM_SERVICES,
+        VAT,
+    )
+
+    spot_vat = spot_kwh * VAT
+    distribution = DISTRIBUTION_NT if low else DISTRIBUTION_VT
+    fees = ELECTREE_FEE + SYSTEM_SERVICES + ENERGY_TAX
+    total = spot_vat + distribution + fees
+    tariff_color = BATTERY if low else GRID
+    change = next_tariff_change(now)
+
+    def node(cls: str, color: str, icon: str, value: float, label: str, sub: str) -> str:
+        return (
+            f"<div class='pf-node {cls}' style='--c:{color}'>{icon_img(icon, color, 22)}"
+            f"<b>{value:.2f}</b><span class='pf-unit'>Kč/kWh</span>"
+            f"<span class='pf-sub'>{label}</span><span class='pf-sub2'>{sub}</span></div>"
         )
 
-    st.markdown("---")
+    return f"""
+    <style>
+      .pf {{ display:grid; grid-template-columns:1fr 34px auto 34px 1fr;
+             grid-template-rows:auto 30px auto 30px auto; align-items:center; justify-items:center;
+             max-width:560px; margin:10px auto 0; }}
+      .pf-node {{ width:clamp(104px,24vw,150px); aspect-ratio:1; border-radius:50%;
+                  border:4px solid var(--c); background:radial-gradient(circle at 50% 35%,
+                  #16213a, #0e1626 70%); box-shadow:0 0 26px color-mix(in srgb,var(--c) 45%,
+                  transparent), inset 0 0 18px color-mix(in srgb,var(--c) 22%, transparent);
+                  display:flex; flex-direction:column; align-items:center; justify-content:center;
+                  gap:1px; text-align:center; }}
+      .pf-node b {{ font-size:clamp(17px,3.4vw,22px); font-weight:600; line-height:1.15;
+                    margin-top:4px; }}
+      .pf-unit {{ font-size:11px; color:{INK_MUTED}; }}
+      .pf-sub {{ font-size:12px; margin-top:3px; border-top:1px solid #ffffff14; padding-top:3px; }}
+      .pf-sub2 {{ font-size:11px; color:{INK_MUTED}; }}
+      .pf-top {{ grid-area:1/3; }} .pf-bottom {{ grid-area:5/3; }}
+      .pf-left {{ grid-area:3/1; }} .pf-right {{ grid-area:3/5; }}
+      .pf-hub {{ grid-area:3/3; border:2.5px solid {ACCENT}; border-radius:16px;
+                 background:#0e1626; padding:14px 16px; text-align:center;
+                 box-shadow:0 0 28px {ACCENT}55, inset 0 0 14px {ACCENT}33; min-width:118px; }}
+      .pf-hub b {{ display:block; font-size:clamp(22px,4.4vw,30px); font-weight:700;
+                   line-height:1.1; margin-top:4px; }}
+      .pf-hub span {{ font-size:11.5px; color:{INK_MUTED}; display:block; }}
+      .pf-hub .pf-t {{ color:{tariff_color}; font-weight:600; font-size:12px; }}
+      .pf-v {{ width:0; height:100%; border-left:2px dotted #5f6b84; }}
+      .pf-h {{ height:0; width:100%; border-top:2px dotted #5f6b84; }}
+      .pf-c1 {{ grid-area:2/3; }} .pf-c2 {{ grid-area:4/3; }}
+      .pf-c3 {{ grid-area:3/2; }} .pf-c4 {{ grid-area:3/4; }}
+      .pf-hub img {{ margin:0 auto; }}
+      @media (max-width: 520px) {{
+        .pf {{ grid-template-columns:1fr 12px auto 12px 1fr; grid-template-rows:auto 18px auto
+               18px auto; }}
+        .pf-node {{ width:86px; height:86px; border-width:3px; }}
+        .pf-node b {{ font-size:15px; margin-top:2px; }}
+        .pf-node img {{ width:16px; height:16px; }}
+        .pf-sub {{ font-size:10px; }} .pf-unit {{ font-size:9px; }} .pf-sub2 {{ display:none; }}
+        .pf-hub {{ min-width:0; padding:10px 8px; }}
+        .pf-hub b {{ font-size:20px; }}
+      }}
+    </style>
+    <div class='pf'>
+      {node('pf-top', SOLAR, 'zap', spot_vat, 'Spot s DPH', f'{spot_kwh:.2f} bez DPH')}
+      <div class='pf-v pf-c1'></div>
+      {node('pf-left', tariff_color, 'clock', distribution, 'Distribuce ' + ('NT' if low else 'VT'),
+            f"{'NT' if low else 'VT'} do {change:%H:%M}")}
+      <div class='pf-h pf-c3'></div>
+      <div class='pf-hub'>{icon_img('home', ACCENT_INK, 22)}<b>{total:.2f}</b>
+        <span>Kč/kWh teď</span><span class='pf-t'>{'NÍZKÝ' if low else 'VYSOKÝ'} TARIF</span></div>
+      <div class='pf-h pf-c4'></div>
+      {node('pf-right', HOME, 'coins', fees, 'Poplatky a daň', 'Electree + služby')}
+      <div class='pf-v pf-c2'></div>
+      {node('pf-bottom', ACCENT_INK, 'pole', spot_vat + distribution, 'Energie + síť',
+            'bez poplatků')}
+    </div>
+    """
 
-    (
-        tab_prices, tab_my, tab_trend, tab_analysis, tab_profiles, tab_forecast, tab_weather,
-    ) = st.tabs([
-        "⚡ Aktuální ceny",
-        "🏠 Moje cena",
-        "📈 Vývoj cen",
-        "📊 Analýza",
-        "👤 Profily & Riziko",
-        "🔮 Predikce",
-        "🌤️ Počasí",
-    ])
 
-    with tab_prices:
-        show_prices_tab()
-    with tab_my:
-        show_my_price_tab()
-    with tab_trend:
-        show_trend_tab()
-    with tab_analysis:
-        show_analysis_tab()
-    with tab_profiles:
-        show_profiles_tab()
-    with tab_forecast:
-        show_forecast_tab()
-    with tab_weather:
-        show_weather_tab()
+def show_overview_page() -> None:
+    from ote.tariff import (
+        DISTRIBUTION_NT,
+        DISTRIBUTION_VT,
+        VAT,
+        compute_tariff_prices,
+        is_low_tariff,
+    )
+
+    now = datetime.now(PRAGUE_TZ)
+    today = now.date()
+    try:
+        prices, _ = fetch_spot_prices(today)
+    except Exception as e:
+        st.error(f"Chyba při načítání dat: {e}")
+        return
+    try:
+        tomorrow_prices, _ = fetch_spot_prices(today + timedelta(days=1))
+    except Exception:
+        tomorrow_prices = []
+    if not prices:
+        st.warning("Žádná data nejsou k dispozici.")
+        return
+
+    current = get_current_price(prices)
+    days = [(today, prices)] + ([(today + timedelta(days=1), tomorrow_prices)]
+                               if tomorrow_prices else [])
+    rows = []
+    for day, day_prices in days:
+        for r in compute_tariff_prices([(p.time_from, p.price_czk) for p in day_prices]):
+            rows.append({
+                "Slot": slot_key(day, r.time_from),
+                "Čas": f"{day:%d.%m.} {r.time_from:%H:%M}",
+                "Koncová cena": r.total_kwh,
+                "Spot s DPH": r.spot_kwh * VAT,
+                "Distribuce": DISTRIBUTION_NT if r.is_low_tariff else DISTRIBUTION_VT,
+            })
+    df = pd.DataFrame(rows)
+
+    left, right = st.columns([1, 1.15], gap="medium")
+    with left:
+        with card("Složení ceny teď", "Spot, distribuce a poplatky · Electree + ČEZ D25d",
+                  icon="activity", tone="accent"):
+            if current is not None:
+                st.html(price_flow_html(current.price_czk / 1000, is_low_tariff(now.hour), now))
+                slot = (f"{current.time_from:%H:%M}–"
+                        f"{current.time_from + timedelta(minutes=15):%H:%M}")
+                st.html(
+                    f"<div style='display:flex;gap:8px;flex-wrap:wrap;margin-top:14px'>"
+                    f"{chip(f'Interval {slot}', 'clock')}"
+                    f"{chip(f'Spot {current.price_czk:,.0f} CZK/MWh', 'zap')}</div>"
+                )
+            else:
+                st.info("Aktuální cena není k dispozici.")
+
+    with right:
+        period = "Dnes a zítra" if tomorrow_prices else "Dnes"
+        with card("Průběh cen", "Koncová cena, spot s DPH a distribuce v Kč/kWh",
+                  icon="line", tone="accent", aside=pill(period, "muted")):
+            series = {"Spot s DPH": SOLAR, "Koncová cena": HOME, "Distribuce": GRID}
+            show_chart(multi_line_chart(df, series, "Kč/kWh", now=now, height=300))
+            now_slot = slot_key(today, now.replace(minute=now.minute // 15 * 15))
+            now_row = df[df["Slot"] == now_slot]
+            table_rows = []
+            notes = {"Spot s DPH": "trh", "Koncová cena": "co platím", "Distribuce": "NT / VT"}
+            for col, color in series.items():
+                peak = df.loc[df[col].idxmax()]
+                table_rows.append({
+                    "color": color, "label": col, "note": notes[col],
+                    "now": f"{now_row[col].iloc[0]:.2f} Kč" if not now_row.empty else "—",
+                    "now_time": f"{now:%H:%M}",
+                    "peak": f"{peak[col]:.2f} Kč", "peak_time": peak["Čas"],
+                })
+            st.html(readout_table(table_rows, ("Teď", "Nejvyšší")))
+
+    show_three_hour_weather_card()
+
+    totals = df["Koncová cena"]
+    today_df = df[df["Slot"].str.startswith(f"{today:%d.%m.}")]
+    cheapest = today_df.loc[today_df["Koncová cena"].idxmin()]
+    priciest = today_df.loc[today_df["Koncová cena"].idxmax()]
+    with card("Dnešní souhrn", "Koncová cena s DPH a distribucí", icon="calendar",
+              tone="solar"):
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Průměr dnes", f"{today_df['Koncová cena'].mean():.2f} Kč/kWh")
+        c2.metric("Nejlevněji", f"{cheapest['Koncová cena']:.2f} Kč/kWh",
+                  help=f"Čtvrthodina {cheapest['Čas']}")
+        c3.metric("Nejdráž", f"{priciest['Koncová cena']:.2f} Kč/kWh",
+                  help=f"Čtvrthodina {priciest['Čas']}")
+        c4.metric("Průměr zítra",
+                  f"{totals[~df['Slot'].isin(today_df['Slot'])].mean():.2f} Kč/kWh"
+                  if tomorrow_prices else "—",
+                  help=None if tomorrow_prices else "Ceny na zítřek budou po 13:10")
+        st.caption(f"Nejlevnější čtvrthodina dnes {cheapest['Čas']}, nejdražší {priciest['Čas']}.")
 
 
-# ─── TAB: Ceny ───────────────────────────────────────────────────────────────
+# ─── Aktuální ceny ───────────────────────────────────────────────────────────
 
 def show_prices_tab() -> None:
     st.sidebar.header("Nastavení")
@@ -231,6 +543,20 @@ def show_prices_tab() -> None:
         show_live_data()
     else:
         show_historical_data()
+
+
+def price_kpis(values: pd.Series, current: SpotPrice | None = None) -> None:
+    cols = st.columns(5 if current is not None else 4)
+    i = 0
+    if current is not None:
+        cols[0].metric("Aktuální cena", f"{current.price_czk:,.0f} CZK/MWh",
+                       help=f"{current.time_from:%H:%M}–{current.time_to:%H:%M}")
+        i = 1
+    cols[i].metric("Minimum", f"{values.min():,.0f} CZK/MWh")
+    cols[i + 1].metric("Maximum", f"{values.max():,.0f} CZK/MWh")
+    cols[i + 2].metric("Průměr", f"{values.mean():,.0f} CZK/MWh")
+    cols[i + 3].metric("Rozpětí", f"{values.max() - values.min():,.0f} CZK/MWh",
+                       help="Max − Min za den")
 
 
 def show_live_data() -> None:
@@ -254,30 +580,13 @@ def show_live_data() -> None:
 
     df = load_prices_as_df(prices)
     current, _ = get_current_price_debug(prices)
+    now = datetime.now(PRAGUE_TZ)
 
-    # KPI řada
-    col1, col2, col3, col4, col5 = st.columns(5)
-    with col1:
-        if current:
-            st.metric("Aktuální cena", f"{current.price_czk:,.0f} CZK/MWh",
-                      help=f"{current.time_from:%H:%M}–{current.time_to:%H:%M}")
-        else:
-            st.metric("Aktuální cena", "—")
-    with col2:
-        st.metric("Minimum dne", f"{df['Cena (CZK/MWh)'].min():,.0f} CZK/MWh")
-    with col3:
-        st.metric("Maximum dne", f"{df['Cena (CZK/MWh)'].max():,.0f} CZK/MWh")
-    with col4:
-        st.metric("Průměr dne", f"{df['Cena (CZK/MWh)'].mean():,.0f} CZK/MWh")
-    with col5:
-        spread = df["Cena (CZK/MWh)"].max() - df["Cena (CZK/MWh)"].min()
-        st.metric("Rozpětí", f"{spread:,.0f} CZK/MWh",
-                  help="Max − Min za den")
-
-    st.caption(f"Kurz ČNB: 1 EUR = {eur_czk_rate:.3f} CZK")
-
-    st.subheader(f"Průběh cen — {selected_date}")
-    st.altair_chart(colored_bar_chart(df), use_container_width=True)
+    with card("Spotová cena", f"{selected_date:%d. %m. %Y} · 15min intervaly OTE",
+              icon="zap", tone="solar", aside=pill(f"1 EUR = {eur_czk_rate:.3f} CZK", "muted")):
+        price_kpis(df["Cena (CZK/MWh)"], current if selected_date == now.date() else None)
+        show_chart(spot_price_chart(df, selected_date, now=now))
+        st.html(level_legend())
 
     with st.expander("Tabulka dat"):
         st.dataframe(
@@ -312,26 +621,14 @@ def show_historical_data() -> None:
 
     df = load_prices_as_df(prices)
 
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Minimum", f"{stats['min']:,.0f} CZK/MWh")
-    with col2:
-        st.metric("Maximum", f"{stats['max']:,.0f} CZK/MWh")
-    with col3:
-        st.metric("Průměr", f"{stats['avg']:,.0f} CZK/MWh")
-    with col4:
-        spread = stats["max"] - stats["min"]
-        st.metric("Rozpětí", f"{spread:,.0f} CZK/MWh")
-
-    st.caption(f"Kurz ČNB: 1 EUR = {stats['eur_czk_rate']:.3f} CZK")
-
-    st.subheader(f"Průběh cen — {selected_date.strftime('%d.%m.%Y')}")
-    st.altair_chart(colored_bar_chart(df), use_container_width=True)
+    with card("Spotová cena z historie", f"{selected_date:%d. %m. %Y}", icon="history",
+              tone="solar", aside=pill(f"1 EUR = {stats['eur_czk_rate']:.3f} CZK", "muted")):
+        price_kpis(df["Cena (CZK/MWh)"])
+        show_chart(spot_price_chart(df, selected_date))
+        st.html(level_legend())
 
     # Porovnání posledních 30 dnů
     if len(dates) > 1:
-        st.subheader("Vývoj průměrných cen — posledních 30 dní")
-
         all_data = []
         for d in dates[:30]:
             day_stats = get_daily_stats(conn, d)
@@ -345,50 +642,56 @@ def show_historical_data() -> None:
 
         if all_data:
             compare_df = pd.DataFrame(all_data)
-
-            band = (
-                alt.Chart(compare_df)
-                .mark_area(opacity=0.15, color="#3B82F6")
-                .encode(
-                    x=alt.X("Datum:T", title="Datum"),
-                    y=alt.Y("Min:Q", title="CZK/MWh", axis=alt.Axis(format=",.0f")),
-                    y2=alt.Y2("Max:Q"),
-                )
-            )
-            line = (
-                alt.Chart(compare_df)
-                .mark_line(color="#3B82F6", strokeWidth=2.5)
-                .encode(
-                    x=alt.X("Datum:T"),
-                    y=alt.Y("Průměr:Q"),
-                    tooltip=[
-                        alt.Tooltip("Datum:T", title="Den", format="%d.%m.%Y"),
-                        alt.Tooltip("Průměr:Q", title="Průměr", format=",.0f"),
-                        alt.Tooltip("Min:Q", title="Min", format=",.0f"),
-                        alt.Tooltip("Max:Q", title="Max", format=",.0f"),
-                    ],
-                )
-            )
-            points = line.mark_point(filled=True, size=40, color="#3B82F6")
-
-            st.altair_chart(
-                (band + line + points).properties(height=280).interactive(),
-                use_container_width=True,
-            )
+            with card("Vývoj průměrných cen", "Posledních 30 dní, pásmo = min–max dne",
+                      icon="line", tone="accent"):
+                show_chart(range_line_chart(compare_df, "Datum:T", "CZK/MWh", ACCENT,
+                                            date_format="%d.%m.%Y", height=280))
 
     conn.close()
 
 
-# ─── TAB: Moje cena ──────────────────────────────────────────────────────────
+def range_line_chart(
+    df: pd.DataFrame, x_field: str, y_title: str, color: str,
+    date_format: str = "%d.%m.", height: int = 260, label_field: str | None = None,
+) -> alt.LayerChart:
+    """Průměr jako zářící čára s bodem, pásmo min–max (sloupce Průměr, Min, Max)."""
+    x = alt.X(x_field, title=None,
+              axis=alt.Axis(format=date_format, tickCount="day") if x_field.endswith(":T")
+              else alt.Axis(labelAngle=0))
+    tooltip = [
+        alt.Tooltip(label_field or x_field, title="Den",
+                    **({"format": date_format} if x_field.endswith(":T") and not label_field
+                       else {})),
+        alt.Tooltip("Průměr:Q", title="Průměr", format=",.0f"),
+        alt.Tooltip("Min:Q", title="Min", format=",.0f"),
+        alt.Tooltip("Max:Q", title="Max", format=",.0f"),
+    ]
+    band = (
+        alt.Chart(df).mark_area(opacity=0.14, color=color)
+        .encode(x=x, y=alt.Y("Min:Q", title=y_title, axis=alt.Axis(format=",.0f")),
+                y2=alt.Y2("Max:Q"))
+    )
+    glow = alt.Chart(df).mark_line(color=color, strokeWidth=7, opacity=0.18).encode(
+        x=x, y="Průměr:Q")
+    line = alt.Chart(df).mark_line(color=color, strokeWidth=2.4).encode(
+        x=x, y="Průměr:Q", tooltip=tooltip)
+    points = alt.Chart(df).mark_point(filled=True, size=46, color=color).encode(
+        x=x, y="Průměr:Q", tooltip=tooltip)
+    return alt.layer(band, glow, line, points).properties(height=height, width="container")
 
-def tariff_df(prices: list[SpotPrice]) -> pd.DataFrame:
+
+# ─── Moje cena ───────────────────────────────────────────────────────────────
+
+def tariff_df(prices: list[SpotPrice], day: date) -> pd.DataFrame:
     """Spotové a koncové ceny v Kč/kWh po 15min intervalech."""
     from ote.tariff import compute_tariff_prices
 
     rows = compute_tariff_prices([(p.time_from, p.price_czk) for p in prices])
     return pd.DataFrame([
         {
+            "Slot": slot_key(day, r.time_from),
             "Hodina": slot_label(r.time_from),
+            "Čas": f"{day:%d.%m.} {r.time_from:%H:%M}",
             "Spot (Kč/kWh)": r.spot_kwh,
             "Tarif": "NT" if r.is_low_tariff else "VT",
             "Celkem (Kč/kWh)": r.total_kwh,
@@ -397,66 +700,11 @@ def tariff_df(prices: list[SpotPrice]) -> pd.DataFrame:
     ])
 
 
-def kwh_bar_chart(
-    df: pd.DataFrame,
-    value_col: str,
-    now: datetime | None = None,
-    by_tariff: bool = False,
-    height: int = 280,
-) -> alt.LayerChart | alt.Chart:
-    """Sloupcový graf v Kč/kWh po 15 min (obdoba apexcharts karet v HA)."""
-    color: alt.Color | alt.ColorValue
-    if by_tariff:
-        color = alt.Color(
-            "Tarif:N",
-            scale=alt.Scale(domain=["NT", "VT"], range=["#22C55E", "#EF4444"]),
-            legend=alt.Legend(title="Tarif", orient="bottom"),
-        )
-    else:
-        color = alt.value("#60A5FA")
-
-    bars = (
-        alt.Chart(df)
-        .mark_bar(cornerRadiusTopLeft=2, cornerRadiusTopRight=2)
-        .encode(
-            x=alt.X(
-                "Hodina:N", title=None, sort=None,
-                # Popisky jen celých hodin, jinak by 96 sloupců bylo nečitelných
-                axis=alt.Axis(labelAngle=0, labelColor="#94A3B8", ticks=False,
-                              labelExpr="substring(datum.value, 3, 5) == '00' && "
-                                        "toNumber(substring(datum.value, 0, 2)) % 2 == 0 "
-                                        "? datum.value : ''"),
-            ),
-            y=alt.Y(f"{value_col}:Q", title="Kč/kWh", axis=alt.Axis(format=",.2f")),
-            color=color,
-            tooltip=[
-                alt.Tooltip("Hodina:N", title="Čas"),
-                alt.Tooltip("Tarif:N", title="Tarif"),
-                alt.Tooltip("Spot (Kč/kWh):Q", title="Spot", format=",.2f"),
-                alt.Tooltip("Celkem (Kč/kWh):Q", title="Celkem", format=",.2f"),
-            ],
-        )
-    )
-    chart: alt.LayerChart | alt.Chart = bars
-    if now is not None:
-        slot = slot_label(now.replace(minute=now.minute // 15 * 15))
-        now_df = pd.DataFrame({"Hodina": [slot], "label": ["Teď"]})
-        rule = (
-            alt.Chart(now_df)
-            .mark_rule(color="#F9FAFB", strokeDash=[4, 3], strokeWidth=1.5)
-            .encode(x=alt.X("Hodina:N", sort=None))
-        )
-        label = (
-            alt.Chart(now_df)
-            .mark_text(align="left", dx=4, color="#F9FAFB", fontSize=11)
-            .encode(x=alt.X("Hodina:N", sort=None), y=alt.value(6), text="label:N")
-        )
-        chart = bars + rule + label
-    return chart.properties(height=height)
-
-
-LEVEL_COLORS = {"nízká": "#22C55E", "normální": "#EAB308", "vysoká": "#EF4444"}
+LEVEL_COLORS = {"nízká": BATTERY, "normální": SOLAR, "vysoká": GRID}
+LEVEL_TONES = {"nízká": "battery", "normální": "solar", "vysoká": "grid"}
 WEEKDAY_SHORT = ["po", "út", "st", "čt", "pá", "so", "ne"]
+WEEKDAY_CZ = ["Po", "Út", "St", "Čt", "Pá", "So", "Ne"]
+WEEKDAY_FULL = ["Pondělí", "Úterý", "Středa", "Čtvrtek", "Pátek", "Sobota", "Neděle"]
 
 
 def show_week_comparison(current: SpotPrice, total: float, low: bool) -> None:
@@ -476,145 +724,54 @@ def show_week_comparison(current: SpotPrice, total: float, low: bool) -> None:
         past.append((weeks, time_from, past_total))
     conn.close()
 
-    st.subheader("Srovnání s minulými týdny")
-    cols = st.columns(3)
-    for col, (weeks, time_from, past_total) in zip(cols, past):
-        label = (
-            f"Před {'týdnem' if weeks == 1 else '2 týdny'} "
-            f"({WEEKDAY_SHORT[time_from.weekday()]} {time_from:%d.%m. %H:%M})"
-        )
-        with col:
-            if past_total is None:
-                st.metric(label, "—", help="Pro tento interval nejsou v historii data")
-            else:
-                diff = total - past_total
-                pct = diff / past_total * 100 if past_total else 0.0
-                st.metric(
-                    label, f"{past_total:.2f} Kč/kWh",
-                    delta=f"{diff:+.2f} Kč/kWh ({pct:+.0f} %)",
-                    delta_color="inverse",
-                )
     level = price_level(total, [t for _, _, t in past if t is not None])
-    with cols[2]:
-        if level:
-            color = LEVEL_COLORS[level]
-            st.markdown(
-                f"<div style='padding:12px 16px; background:{color}20; border:1px solid {color}; "
-                f"border-radius:10px; color:{color}; text-align:center;'>"
-                f"<div style='font-size:0.8rem; opacity:0.8;'>Aktuální cena je vůči minulým "
-                f"týdnům</div><div style='font-weight:700; font-size:1.2rem;'>"
-                f"{level.upper()}</div></div>",
-                unsafe_allow_html=True,
+    with card("Srovnání s minulými týdny", "Stejný den v týdnu a stejná čtvrthodina",
+              icon="history", tone="home",
+              aside=pill(f"cena {level}", LEVEL_TONES[level]) if level else None):
+        cols = st.columns(3)
+        for col, (weeks, time_from, past_total) in zip(cols, past):
+            label = (
+                f"Před {'týdnem' if weeks == 1 else '2 týdny'} "
+                f"({WEEKDAY_SHORT[time_from.weekday()]} {time_from:%d.%m. %H:%M})"
             )
-        else:
-            st.metric("Hodnocení", "—", help="Chybí data z minulých týdnů")
-    st.caption(
-        "Koncová cena s DPH a distribucí, stejný den v týdnu a stejná čtvrthodina; "
-        "šipka = o kolik je cena teď vyšší/nižší. "
-        "Starší ceny přepočteny dnešním ceníkem, rozdíl je tedy jen ve spotu. "
-        "Vysoká/nízká = o více než 15 % nad/pod průměrem obou týdnů."
-    )
-
-
-# Barvy čáry koncové ceny odspodu nahoru (gradient se roztáhne mezi min a max)
-FINAL_PRICE_STOPS = [
-    alt.GradientStop(color="#22C55E", offset=0),
-    alt.GradientStop(color="#EAB308", offset=0.45),
-    alt.GradientStop(color="#F97316", offset=0.7),
-    alt.GradientStop(color="#EF4444", offset=1),
-]
+            with col:
+                if past_total is None:
+                    st.metric(label, "—", help="Pro tento interval nejsou v historii data")
+                else:
+                    diff = total - past_total
+                    pct = diff / past_total * 100 if past_total else 0.0
+                    st.metric(
+                        label, f"{past_total:.2f} Kč/kWh",
+                        delta=f"{diff:+.2f} Kč/kWh ({pct:+.0f} %)",
+                        delta_color="inverse",
+                    )
+        with cols[2]:
+            if level:
+                st.html(status_box("Vůči minulým týdnům", level.upper(),
+                                   f"teď {total:.2f} Kč/kWh", LEVEL_TONES[level]))
+            else:
+                st.metric("Hodnocení", "—", help="Chybí data z minulých týdnů")
+        st.caption(
+            "Koncová cena s DPH a distribucí; šipka = o kolik je cena teď vyšší/nižší. "
+            "Starší ceny přepočteny dnešním ceníkem, rozdíl je tedy jen ve spotu. "
+            "Vysoká/nízká = o více než 15 % nad/pod průměrem obou týdnů."
+        )
 
 
 def final_price_chart(
     days: list[tuple[date, list[SpotPrice]]], now: datetime, height: int = 320,
 ) -> alt.LayerChart:
     """Schodový graf koncové ceny (NT/VT) přes dnešek a zítřek, NT podbarvený."""
-    from ote.tariff import compute_tariff_prices
-
-    rows = []
-    for day, prices in days:
-        for r in compute_tariff_prices([(p.time_from, p.price_czk) for p in prices]):
-            rows.append({
-                # Kategorická osa (temporal se ve Streamlitu vykreslí prázdná) – klíč i s dnem
-                "Slot": f"{day:%d.%m.} {slot_label(r.time_from)}",
-                "Čas": f"{day:%d.%m.} {r.time_from:%H:%M}",
-                "Tarif": "NT" if r.is_low_tariff else "VT",
-                "Celkem (Kč/kWh)": r.total_kwh,
-                "Spot (Kč/kWh)": r.spot_kwh,
-            })
-    df = pd.DataFrame(rows)
-    # Pásy NT přes celou výšku grafu (ve stejném měřítku jako cena)
-    df["band_lo"] = min(0.0, df["Celkem (Kč/kWh)"].min())
-    df["band_hi"] = df["Celkem (Kč/kWh)"].max()
-
-    x = alt.X(
-        "Slot:N", title=None, sort=None,
-        axis=alt.Axis(labelAngle=0, labelColor="#94A3B8", ticks=False, grid=False,
-                      labelExpr="substring(datum.value, 10, 12) == '00' && "
-                                "toNumber(substring(datum.value, 7, 9)) % 6 == 0 "
-                                "? substring(datum.value, 7, 12) : ''"),
-    )
-    y = alt.Y("Celkem (Kč/kWh):Q", title="Kč/kWh",
-              axis=alt.Axis(format=",.0f", gridColor="#1F2937", labelColor="#94A3B8"))
-
-    # Podbarvení NT + neviditelné sloupce pro tooltip přes celou výšku
-    bands = (
-        alt.Chart(df)
-        .mark_bar(width={"band": 1})
-        .encode(
-            x=x, y="band_lo:Q", y2="band_hi:Q",
-            color=alt.Color("Tarif:N", scale=alt.Scale(domain=["NT", "VT"],
-                                                       range=["#22C55E", "#0B1220"]),
-                            legend=None),
-            opacity=alt.condition("datum.Tarif == 'NT'", alt.value(0.12), alt.value(0.01)),
-            tooltip=[
-                alt.Tooltip("Čas:N", title="Čas"),
-                alt.Tooltip("Tarif:N", title="Tarif"),
-                alt.Tooltip("Celkem (Kč/kWh):Q", title="Koncová cena", format=",.2f"),
-                alt.Tooltip("Spot (Kč/kWh):Q", title="Spot bez DPH", format=",.2f"),
-            ],
-        )
-    )
-    area = (
-        alt.Chart(df)
-        .mark_area(interpolate="step-after", opacity=0.22, color=alt.Gradient(
-            gradient="linear", stops=FINAL_PRICE_STOPS, x1=1, x2=1, y1=1, y2=0))
-        .encode(x=x, y=y)
-    )
-    line = (
-        alt.Chart(df)
-        .mark_line(interpolate="step-after", strokeWidth=2.2, color=alt.Gradient(
-            gradient="linear", stops=FINAL_PRICE_STOPS, x1=1, x2=1, y1=1, y2=0))
-        .encode(x=x, y=y)
-    )
-
-    # Půlnoc mezi dny + popisek dne
-    day_df = pd.DataFrame([
-        {"Slot": f"{day:%d.%m.} 00:00", "label": "dnes" if i == 0 else "zítra"}
-        for i, (day, _) in enumerate(days)
-    ])
-    day_rules = (
-        alt.Chart(day_df.iloc[1:])
-        .mark_rule(color="#475569", strokeWidth=1)
-        .encode(x=alt.X("Slot:N", sort=None))
-    )
-    day_labels = (
-        alt.Chart(day_df)
-        .mark_text(align="left", dx=4, color="#94A3B8", fontSize=11)
-        .encode(x=alt.X("Slot:N", sort=None), y=alt.value(8), text="label:N")
-    )
-
-    now_slot = f"{now:%d.%m.} {slot_label(now.replace(minute=now.minute // 15 * 15))}"
-    now_rule = (
-        alt.Chart(pd.DataFrame({"Slot": [now_slot]}))
-        .mark_rule(color="#FBBF24", strokeDash=[4, 3], strokeWidth=1.5)
-        .encode(x=alt.X("Slot:N", sort=None))
-    )
-
-    return (
-        (bands + area + line + day_rules + day_labels + now_rule)
-        .properties(height=height, width="container")
-        .configure_view(strokeWidth=0)
+    df = pd.concat([tariff_df(p, d) for d, p in days], ignore_index=True)
+    return gradient_line_chart(
+        df, "Celkem (Kč/kWh)", "Kč/kWh",
+        tooltip=[
+            alt.Tooltip("Čas:N", title="Čas"),
+            alt.Tooltip("Tarif:N", title="Tarif"),
+            alt.Tooltip("Celkem (Kč/kWh):Q", title="Koncová cena", format=",.2f"),
+            alt.Tooltip("Spot (Kč/kWh):Q", title="Spot bez DPH", format=",.2f"),
+        ],
+        now=now, nt_bands=True, y_format=",.0f", height=height,
     )
 
 
@@ -634,30 +791,26 @@ def show_final_price_card(
         for r in compute_tariff_prices([(p.time_from, p.price_czk) for p in day_prices])
     ])
 
-    with st.container(border=True):
-        period = "Dnes a zítra" if tomorrow_prices else "Dnes"
+    period = "Dnes a zítra" if tomorrow_prices else "Dnes"
+    with card("Ceny elektřiny", "Koncová cena s DPH a distribucí", icon="coins",
+              tone="readout", aside=pill(period, "muted")):
         if current is not None:
             low = is_low_tariff(now.hour)
             total = total_price_kwh(czk_mwh_to_kwh(current.price_czk), low)
             badge = price_color(total, *totals.quantile([0.10, 0.30, 0.70, 0.90]))
-            tariff = "NT" if low else "VT"
-            tariff_color = "#22C55E" if low else "#EF4444"
-            st.markdown(
-                f"<div style='display:flex; justify-content:space-between; align-items:center;'>"
-                f"<div style='font-size:1.3rem; font-weight:700; color:#F9FAFB;'>Ceny elektřiny"
-                f"</div><div style='color:#94A3B8;'>{period}</div></div>"
-                f"<div style='margin-top:10px; color:#94A3B8; font-size:0.95rem;'>Nyní "
-                f"<b style='color:{tariff_color};'>{tariff}</b> · s DPH a distribucí</div>"
-                f"<div style='display:inline-block; margin:4px 0 6px; padding:2px 18px; "
-                f"background:{badge}; color:#0B1220; border-radius:10px; font-size:2.6rem; "
-                f"font-weight:800; line-height:1.25;'>{total:.2f} Kč/kWh</div>"
-                f"<div style='color:#94A3B8;'>Min {totals.min():.2f} Kč/kWh · "
-                f"Max {totals.max():.2f} Kč/kWh</div>",
-                unsafe_allow_html=True,
+            tariff = pill("NT", "battery") if low else pill("VT", "grid")
+            st.html(
+                f"<div style='margin-top:6px;color:{INK_MUTED};font-size:14px;display:flex;"
+                f"align-items:center;gap:8px'>Nyní {tariff} s DPH a distribucí</div>"
+                f"<div style='display:inline-block;margin:6px 0;padding:2px 18px;"
+                f"background:{badge};color:#0b1220;border-radius:12px;font-size:2.6rem;"
+                f"font-weight:700;line-height:1.25;box-shadow:0 0 30px {badge}55'>"
+                f"{total:.2f} Kč/kWh</div>"
+                f"<div style='color:{INK_MUTED};font-size:14px'>Min {totals.min():.2f} Kč/kWh "
+                f"· Max {totals.max():.2f} Kč/kWh</div>"
             )
-        st.altair_chart(final_price_chart(days, now), use_container_width=True)
-        st.caption("Koncová cena za kWh podle tarifu; zeleně podbarvený je nízký tarif (NT), "
-                   "žlutá čárkovaná čára = teď.")
+        show_chart(final_price_chart(days, now))
+        st.caption("Zeleně podbarvený je nízký tarif (NT), oranžová čárkovaná čára = teď.")
 
 
 def show_my_price_tab() -> None:
@@ -692,8 +845,10 @@ def show_my_price_tab() -> None:
         st.warning("Žádná data nejsou k dispozici.")
         return
 
-    df_today = tariff_df(prices)
-    df_tomorrow = tariff_df(tomorrow_prices) if tomorrow_prices else None
+    df_today = tariff_df(prices, today)
+    df_tomorrow = (
+        tariff_df(tomorrow_prices, today + timedelta(days=1)) if tomorrow_prices else None
+    )
     current = get_current_price(prices)
 
     # ── Karta s koncovou cenou NT/VT ──
@@ -704,74 +859,65 @@ def show_my_price_tab() -> None:
         f"{current.time_from:%H:%M}–{current.time_from + timedelta(minutes=15):%H:%M}"
         if current else None
     )
-    st.subheader(f"Přehled cen — {slot}" if slot else "Přehled cen")
-    st.caption(
-        f"Ceny platí pro interval {slot or '—'} · aktualizováno {now:%H:%M:%S} · "
-        f"další obnova {next_refresh_time(now):%H:%M}"
-    )
     spot = czk_mwh_to_kwh(current.price_czk) if current else None
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("Spot", f"{spot:.2f} Kč/kWh" if spot is not None else "—",
-                  help="Aktuální spotová cena bez DPH")
-    with col2:
-        st.metric("Nízký tarif",
-                  f"{low_tariff_price(spot):.2f} Kč/kWh" if spot is not None else "—")
-    with col3:
-        st.metric("Vysoký tarif",
-                  f"{high_tariff_price(spot):.2f} Kč/kWh" if spot is not None else "—")
-    with col4:
-        boiler_slot = st.empty()
-
+    low = is_low_tariff(now.hour)
+    total = None
     if spot is not None:
-        low = is_low_tariff(now.hour)
-        tariff = "NÍZKÝ TARIF" if low else "VYSOKÝ TARIF"
-        color = "#22C55E" if low else "#EF4444"
         total = low_tariff_price(spot) if low else high_tariff_price(spot)
-        st.markdown(
-            f"<div style='margin-top:8px; padding:12px 20px; background:{color}20; "
-            f"border:1px solid {color}; border-radius:10px; text-align:center; color:{color}; "
-            f"font-weight:700; font-size:1.1rem;'>{slot} platí {tariff} — "
-            f"{total:.2f} Kč/kWh</div>",
-            unsafe_allow_html=True,
-        )
+    with card("Přehled cen", f"Ceny platí pro interval {slot or '—'}", icon="gauge",
+              tone="solar"):
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            st.metric("Spot", f"{spot:.2f} Kč/kWh" if spot is not None else "—",
+                      help="Aktuální spotová cena bez DPH")
+        with col2:
+            st.metric("Nízký tarif",
+                      f"{low_tariff_price(spot):.2f} Kč/kWh" if spot is not None else "—")
+        with col3:
+            st.metric("Vysoký tarif",
+                      f"{high_tariff_price(spot):.2f} Kč/kWh" if spot is not None else "—")
+        with col4:
+            boiler_slot = st.empty()
+
+        if total is not None:
+            st.html(status_box(
+                f"{slot} platí", "NÍZKÝ TARIF" if low else "VYSOKÝ TARIF",
+                f"{total:.2f} Kč/kWh · změna v {next_tariff_change(now):%H:%M}",
+                "battery" if low else "grid",
+            ))
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Průměr spotu dnes", f"{df_today['Spot (Kč/kWh)'].mean():.2f} Kč/kWh")
+        with col2:
+            if df_tomorrow is not None:
+                st.metric("Průměr spotu zítra",
+                          f"{df_tomorrow['Spot (Kč/kWh)'].mean():.2f} Kč/kWh")
+            else:
+                st.metric("Průměr spotu zítra", "—",
+                          help="Ceny zítra budou k dispozici po 13:10")
 
     # ── Srovnání se stejnou čtvrthodinou před 1 a 2 týdny ──
-    if current is not None and spot is not None:
+    if current is not None and total is not None:
         show_week_comparison(current, total, low)
 
-    # ── Průměr spotu ──
-    st.subheader("Průměr spotu")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("Dnes", f"{df_today['Spot (Kč/kWh)'].mean():.2f} Kč/kWh")
-    with col2:
-        if df_tomorrow is not None:
-            st.metric("Zítra", f"{df_tomorrow['Spot (Kč/kWh)'].mean():.2f} Kč/kWh")
-        else:
-            st.metric("Zítra", "—", help="Ceny zítra budou k dispozici po 13:10")
-
-    st.markdown("---")
-
-    # ── Grafy ──
-    st.subheader("Spot během dne")
-    st.altair_chart(kwh_bar_chart(df_today, "Spot (Kč/kWh)", now=now), use_container_width=True)
-
-    st.subheader("Spot zítra")
-    if df_tomorrow is not None:
-        st.altair_chart(kwh_bar_chart(df_tomorrow, "Spot (Kč/kWh)"), use_container_width=True)
-    else:
-        st.info("Ceny zítra budou k dispozici po 13:10.")
-
-    st.subheader("Celková cena podle tarifu")
-    st.altair_chart(
-        kwh_bar_chart(df_today, "Celkem (Kč/kWh)", now=now, by_tariff=True),
-        use_container_width=True,
-    )
+    # ── Spot dnes a zítra ──
+    df_spot = pd.concat([d for d in (df_today, df_tomorrow) if d is not None], ignore_index=True)
+    with card("Spot", "Spotová cena bez DPH v Kč/kWh", icon="zap", tone="solar",
+              aside=pill("Dnes a zítra" if df_tomorrow is not None else "Dnes", "muted")):
+        show_chart(gradient_line_chart(
+            df_spot, "Spot (Kč/kWh)", "Kč/kWh",
+            tooltip=[alt.Tooltip("Čas:N", title="Čas"),
+                     alt.Tooltip("Spot (Kč/kWh):Q", title="Spot", format=",.2f")],
+            now=now, y_format=",.1f", height=280,
+        ))
+        if df_tomorrow is None:
+            st.caption("Ceny zítra budou k dispozici po 13:10.")
 
     # ── Bojler ──
-    boiler_value = st.slider("Bojler hodnota", min_value=0.0, max_value=6.0, value=4.0,
-                             step=0.1, key="boiler_value")
+    with card("Bojler", "Hodnota × 2,4 Kč", icon="thermometer", tone="grid"):
+        boiler_value = st.slider("Bojler hodnota", min_value=0.0, max_value=6.0, value=4.0,
+                                 step=0.1, key="boiler_value")
     with boiler_slot:
         st.metric("Bojler", f"{boiler_price(boiler_value):.2f} Kč",
                   help="Bojler hodnota × 2,4 Kč")
@@ -805,12 +951,38 @@ def show_my_price_tab() -> None:
         )
 
 
-# ─── TAB: Vývoj cen ──────────────────────────────────────────────────────────
+# ─── Vývoj cen ───────────────────────────────────────────────────────────────
 
 MONTH_NAMES = [
     "Leden", "Únor", "Březen", "Duben", "Květen", "Červen",
     "Červenec", "Srpen", "Září", "Říjen", "Listopad", "Prosinec",
 ]
+
+
+def hour_line_chart(
+    df: pd.DataFrame, x_field: str, y_field: str, y_title: str, color: str,
+    tooltip: list, height: int = 220, area: bool = True, y_format: str = ",.0f",
+    interpolate: str = "monotone",
+) -> alt.LayerChart:
+    """Jedna zářící čára (volitelně s plochou) přes hodiny dne nebo jiné kategorie."""
+    x = alt.X(x_field, title=None, sort=None, axis=alt.Axis(labelAngle=0))
+    y = alt.Y(y_field, title=y_title, axis=alt.Axis(
+        format=y_format, tickMinStep=1 if y_format == "d" else alt.Undefined))
+    layers = []
+    if area:
+        layers.append(alt.Chart(df).mark_area(color=alt.Gradient(
+            gradient="linear", x1=1, x2=1, y1=1, y2=0,
+            stops=[alt.GradientStop(color=f"{color}00", offset=0),
+                   alt.GradientStop(color=f"{color}55", offset=1)],
+        ), interpolate=interpolate).encode(x=x, y=y))
+    layers += [
+        alt.Chart(df).mark_line(color=color, strokeWidth=7, opacity=0.18,
+                                interpolate=interpolate).encode(x=x, y=y),
+        alt.Chart(df).mark_line(color=color, strokeWidth=2.2, interpolate=interpolate,
+                                point=alt.OverlayMarkDef(filled=True, size=30, color=color))
+        .encode(x=x, y=y, tooltip=tooltip),
+    ]
+    return alt.layer(*layers).properties(height=height, width="container")
 
 
 def show_trend_tab() -> None:
@@ -844,32 +1016,29 @@ def show_trend_tab() -> None:
     days = sum(s.days for s in stats)
 
     # ── Základní údaje ──
-    st.subheader(f"Rok {year}")
-    col1, col2, col3, col4, col5 = st.columns(5)
-    with col1:
-        st.metric("Průměr roku", f"{year_avg:,.0f} CZK/MWh",
-                  help=f"{year_avg / 1000:.2f} Kč/kWh bez DPH, vážený přes všechny intervaly")
-    with col2:
-        st.metric("Nejlevnější měsíc", MONTH_NAMES[cheapest.month - 1])
-        st.caption(f"{cheapest.avg_price:,.0f} CZK/MWh")
-    with col3:
-        st.metric("Nejdražší měsíc", MONTH_NAMES[priciest.month - 1])
-        st.caption(f"{priciest.avg_price:,.0f} CZK/MWh")
-    with col4:
-        st.metric("Dnů s daty", days, help=f"Měsíců s daty: {len(stats)} z 12")
-    with col5:
-        st.metric("Negativní intervaly", f"{sum(s.negative_count for s in stats):,}",
-                  help="Počet 15min intervalů se zápornou cenou")
-
     first, last = stats[0].month, stats[-1].month
-    if len(stats) < 12:
-        st.caption(
-            f"Data pokrývají {MONTH_NAMES[first - 1].lower()} – {MONTH_NAMES[last - 1].lower()} "
-            f"{year}; průměr roku je jen z těchto měsíců."
-        )
+    coverage = (
+        f"Data pokrývají {MONTH_NAMES[first - 1].lower()} – {MONTH_NAMES[last - 1].lower()} "
+        f"{year}; průměr roku je jen z těchto měsíců." if len(stats) < 12 else "Celý rok"
+    )
+    with card(f"Rok {year}", coverage, icon="calendar", tone="solar"):
+        col1, col2, col3, col4, col5 = st.columns(5)
+        with col1:
+            st.metric("Průměr roku", f"{year_avg:,.0f} CZK/MWh",
+                      help=f"{year_avg / 1000:.2f} Kč/kWh bez DPH, vážený přes všechny intervaly")
+        with col2:
+            st.metric("Nejlevnější měsíc", MONTH_NAMES[cheapest.month - 1],
+                      help=f"{cheapest.avg_price:,.0f} CZK/MWh")
+        with col3:
+            st.metric("Nejdražší měsíc", MONTH_NAMES[priciest.month - 1],
+                      help=f"{priciest.avg_price:,.0f} CZK/MWh")
+        with col4:
+            st.metric("Dnů s daty", days, help=f"Měsíců s daty: {len(stats)} z 12")
+        with col5:
+            st.metric("Negativní intervaly", f"{sum(s.negative_count for s in stats):,}",
+                      help="Počet 15min intervalů se zápornou cenou")
 
     # ── Graf ──
-    st.subheader(f"Průměrná cena podle měsíců — {year} vs {year - 1}")
     month_df = pd.DataFrame([
         {
             "Měsíc": MONTH_NAMES[s.month - 1],
@@ -888,7 +1057,6 @@ def show_trend_tab() -> None:
         for s in stats
     ])
 
-    # Dlouhý formát: jeden řádek za měsíc a rok, sloupce vedle sebe přes xOffset
     cy, ly = str(year), str(year - 1)
     chart_df = pd.concat([
         pd.DataFrame([
@@ -901,60 +1069,44 @@ def show_trend_tab() -> None:
 
     x = alt.X("Měsíc:N", title=None, sort=MONTH_NAMES,
               scale=alt.Scale(domain=MONTH_NAMES), axis=alt.Axis(labelAngle=0))
-    x_offset = alt.XOffset("Rok:N", sort=[ly, cy], scale=alt.Scale(domain=[ly, cy]))
-    bars = (
-        alt.Chart(chart_df)
-        .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
-        .encode(
-            x=x,
-            xOffset=x_offset,
-            y=alt.Y("Průměr:Q", title="CZK/MWh", axis=alt.Axis(format=",.0f")),
-            color=alt.Color(
-                "Rok:N",
-                scale=alt.Scale(domain=[ly, cy], range=["#64748B", "#3B82F6"]),
-                legend=alt.Legend(title=None, orient="top"),
-            ),
-            tooltip=[
-                alt.Tooltip("Měsíc:N"),
-                alt.Tooltip("Rok:N"),
-                alt.Tooltip("Průměr:Q", title="Průměr CZK/MWh", format=",.0f"),
-                alt.Tooltip("Dnů:Q"),
-                alt.Tooltip("Změna vs LY (%):Q", format="+.1f"),
-            ],
-        )
-    )
+    y = alt.Y("Průměr:Q", title="CZK/MWh", axis=alt.Axis(format=",.0f"))
+    color = alt.Color("Rok:N", scale=alt.Scale(domain=[ly, cy], range=["#5f6b84", ACCENT]),
+                      legend=alt.Legend(title=None, orient="top"))
+    dash = alt.StrokeDash("Rok:N", scale=alt.Scale(domain=[ly, cy], range=[[5, 4], [1, 0]]),
+                          legend=None)
+    tooltip = [
+        alt.Tooltip("Měsíc:N"), alt.Tooltip("Rok:N"),
+        alt.Tooltip("Průměr:Q", title="Průměr CZK/MWh", format=",.0f"),
+        alt.Tooltip("Dnů:Q"), alt.Tooltip("Změna vs LY (%):Q", format="+.1f"),
+    ]
+    base = alt.Chart(chart_df)
+    glow = base.mark_line(strokeWidth=8, opacity=0.16).encode(x=x, y=y, color=color)
+    lines = base.mark_line(strokeWidth=2.4).encode(x=x, y=y, color=color, strokeDash=dash)
+    points = base.mark_point(filled=True, size=60).encode(x=x, y=y, color=color,
+                                                           tooltip=tooltip)
     labels = (
-        alt.Chart(chart_df)
-        .mark_text(dy=-8, fontSize=10)
-        .encode(
-            x=x,
-            xOffset=x_offset,
-            y="Průměr:Q",
-            text=alt.Text("Průměr:Q", format=",.0f"),
-            color=alt.Color("Rok:N", scale=alt.Scale(domain=[ly, cy],
-                                                     range=["#94A3B8", "#E5E7EB"]),
-                            legend=None),
-        )
+        alt.Chart(chart_df[chart_df["Rok"] == cy])
+        .mark_text(dy=-14, fontSize=11, color="#eef2f8")
+        .encode(x=x, y="Průměr:Q", text=alt.Text("Průměr:Q", format=",.0f"))
     )
     avg_rule = (
         alt.Chart(pd.DataFrame({"Průměr roku": [year_avg]}))
-        .mark_rule(color="#F97316", strokeDash=[6, 4], strokeWidth=2)
-        .encode(y="Průměr roku:Q",
-                tooltip=[alt.Tooltip("Průměr roku:Q", format=",.0f")])
-    )
-    st.altair_chart(
-        (bars + labels + avg_rule).resolve_scale(color="independent").properties(height=360),
-        use_container_width=True,
+        .mark_rule(color=READOUT, strokeDash=[6, 4], strokeWidth=1.6)
+        .encode(y="Průměr roku:Q", tooltip=[alt.Tooltip("Průměr roku:Q", format=",.0f")])
     )
 
     common = [m for m in month_df.itertuples() if m.LY is not None and not pd.isna(m.LY)]
     if not ly_stats:
-        st.caption(f"Oranžová čára = průměr roku {year}. Pro rok {year - 1} nejsou v databázi "
-                   f"data, porovnání vs LY zatím není k dispozici.")
+        note = (f"Oranžová čára = průměr roku {year}. Pro rok {year - 1} nejsou v databázi "
+                f"data, porovnání vs LY zatím není k dispozici.")
     else:
-        st.caption(f"Oranžová čára = průměr roku {year}. Šedé sloupce = {year - 1}, "
-                   f"porovnání je k dispozici pro {len(common)} "
-                   f"{'měsíc' if len(common) == 1 else 'měsíce' if len(common) < 5 else 'měsíců'}.")
+        note = (f"Oranžová čára = průměr roku {year}. Čárkovaně = {year - 1}, "
+                f"porovnání je k dispozici pro {len(common)} "
+                f"{'měsíc' if len(common) == 1 else 'měsíce' if len(common) < 5 else 'měsíců'}.")
+    with card("Průměrná cena podle měsíců", f"{year} vs {year - 1}", icon="line", tone="accent"):
+        show_chart(alt.layer(glow, lines, points, labels, avg_rule)
+                   .properties(height=360, width="container"))
+        st.caption(note)
 
     with st.expander("Tabulka po měsících"):
         st.dataframe(
@@ -971,7 +1123,13 @@ def show_trend_tab() -> None:
         )
 
 
-# ─── TAB: Analýza ────────────────────────────────────────────────────────────
+# ─── Analýza ─────────────────────────────────────────────────────────────────
+
+LEVEL_TONE_BY_NAME = {
+    "velmi levná": "battery", "levná": "battery", "normální": "solar",
+    "drahá": "readout", "velmi drahá": "grid",
+}
+
 
 def show_analysis_tab() -> None:
     conn = get_connection()
@@ -996,123 +1154,74 @@ def show_analysis_tab() -> None:
         get_negative_price_hours_list,
         get_negative_price_stats,
         get_price_distribution,
-        get_price_level_color,
         get_price_trend,
         get_weekday_hour_heatmap_data,
         get_worst_hours,
     )
 
-    # ── Aktuální cenová hladina ──
-    st.subheader("Aktuální cenová hladina")
-    try:
-        prices, _ = fetch_spot_prices(date.today())
-        current = get_current_price(prices)
-        if current:
-            classification = classify_price(current.price_czk, conn)
-            color = get_price_level_color(classification)
-            col1, col2 = st.columns([1, 2])
-            with col1:
-                st.metric("Aktuální cena", f"{current.price_czk:,.0f} CZK/MWh")
-            with col2:
-                st.markdown(
-                    f"<div style='margin-top:8px; padding:14px 20px; background:{color}20; "
-                    f"border:1px solid {color}; border-radius:10px; text-align:center; "
-                    f"color:{color}; font-weight:700; font-size:1.1rem; letter-spacing:1px;'>"
-                    f"{classification.upper()}</div>",
-                    unsafe_allow_html=True,
-                )
-        else:
-            st.info("Aktuální cena není k dispozici.")
-    except Exception:
-        st.info("Nelze načíst aktuální cenu z API.")
+    # ── Aktuální cenová hladina + průměr podle hodiny ──
+    left, right = st.columns([1, 2], gap="medium")
+    with left:
+        with card("Cenová hladina", "Aktuální spot vůči posledním 30 dnům", icon="gauge",
+                  tone="solar"):
+            try:
+                prices, _ = fetch_spot_prices(date.today())
+                current = get_current_price(prices)
+                if current:
+                    classification = classify_price(current.price_czk, conn)
+                    st.metric("Aktuální cena", f"{current.price_czk:,.0f} CZK/MWh")
+                    st.html(status_box(
+                        "Hladina", classification.upper(),
+                        f"interval {current.time_from:%H:%M}",
+                        LEVEL_TONE_BY_NAME.get(classification, "muted"),
+                    ))
+                else:
+                    st.info("Aktuální cena není k dispozici.")
+            except Exception:
+                st.info("Nelze načíst aktuální cenu z API.")
 
-    st.markdown("---")
-
-    # ── Průměrné ceny podle hodiny ──
-    st.subheader("Průměrné ceny podle hodiny (posledních 30 dní)")
-    patterns = get_hourly_patterns(conn, days_back=30)
-
-    if patterns:
-        pattern_df = pd.DataFrame([
-            {"Hodina": p.hour, "Průměr": p.avg_price, "Min": p.min_price, "Max": p.max_price}
-            for p in patterns
-        ])
-
-        band = (
-            alt.Chart(pattern_df)
-            .mark_area(opacity=0.12, color="#3B82F6")
-            .encode(
-                x=alt.X("Hodina:O", title="Hodina"),
-                y=alt.Y("Min:Q", title="CZK/MWh", axis=alt.Axis(format=",.0f")),
-                y2=alt.Y2("Max:Q"),
-            )
-        )
-        bars = (
-            alt.Chart(pattern_df)
-            .mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3, color="#3B82F6", opacity=0.85)
-            .encode(
-                x=alt.X("Hodina:O"),
-                y=alt.Y("Průměr:Q"),
-                tooltip=[
-                    alt.Tooltip("Hodina:O", title="Hodina"),
-                    alt.Tooltip("Průměr:Q", title="Průměr", format=",.0f"),
-                    alt.Tooltip("Min:Q", title="Min", format=",.0f"),
-                    alt.Tooltip("Max:Q", title="Max", format=",.0f"),
-                ],
-            )
-        )
-        st.altair_chart((band + bars).properties(height=280).interactive(), use_container_width=True)
+    with right:
+        patterns = get_hourly_patterns(conn, days_back=30)
+        with card("Průměrné ceny podle hodiny", "Posledních 30 dní, pásmo = min–max",
+                  icon="activity", tone="accent"):
+            if patterns:
+                pattern_df = pd.DataFrame([
+                    {"Hodina": p.hour, "Průměr": p.avg_price, "Min": p.min_price,
+                     "Max": p.max_price}
+                    for p in patterns
+                ])
+                show_chart(range_line_chart(pattern_df, "Hodina:O", "CZK/MWh", ACCENT,
+                                            height=250, label_field="Hodina:O"))
 
     # Nejlevnější / nejdražší hodiny
-    col1, col2 = st.columns(2)
+    col1, col2 = st.columns(2, gap="medium")
     with col1:
-        st.markdown("### 🟢 Nejlevnější hodiny")
-        best = get_best_hours(conn, top_n=5)
-        for i, (hour, price) in enumerate(best):
-            medal = ["🥇", "🥈", "🥉", "4.", "5."][i]
-            st.markdown(
-                f"<div style='display:flex;justify-content:space-between;padding:8px 12px;"
-                f"background:#1F2937;border-radius:8px;margin-bottom:6px;'>"
-                f"<span>{medal} <strong>{hour:02d}:00</strong></span>"
-                f"<span style='color:#22C55E;font-weight:600'>{price:,.0f} CZK</span>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
+        with card("Nejlevnější hodiny", "Průměr za 30 dní", icon="down", tone="battery"):
+            best = get_best_hours(conn, top_n=5)
+            st.html(rank_list([(f"{h:02d}:00", f"{p:,.0f} CZK") for h, p in best], "battery"))
     with col2:
-        st.markdown("### 🔴 Nejdražší hodiny")
-        worst = get_worst_hours(conn, top_n=5)
-        for i, (hour, price) in enumerate(worst):
-            medal = ["🥇", "🥈", "🥉", "4.", "5."][i]
-            st.markdown(
-                f"<div style='display:flex;justify-content:space-between;padding:8px 12px;"
-                f"background:#1F2937;border-radius:8px;margin-bottom:6px;'>"
-                f"<span>{medal} <strong>{hour:02d}:00</strong></span>"
-                f"<span style='color:#EF4444;font-weight:600'>{price:,.0f} CZK</span>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-
-    st.markdown("---")
+        with card("Nejdražší hodiny", "Průměr za 30 dní", icon="up", tone="grid"):
+            worst = get_worst_hours(conn, top_n=5)
+            st.html(rank_list([(f"{h:02d}:00", f"{p:,.0f} CZK") for h, p in worst], "grid"))
 
     # ── Týdenní heatmapa ──
     if days_count >= 14:
-        st.subheader("Heatmapa: hodina × den v týdnu")
         heatmap_data = get_weekday_hour_heatmap_data(conn, days_back=60)
         if heatmap_data:
             heatmap_df = pd.DataFrame(heatmap_data)
             heatmap = (
                 alt.Chart(heatmap_df)
-                .mark_rect(cornerRadius=2)
+                .mark_rect(cornerRadius=4, stroke="#111a2e", strokeWidth=2)
                 .encode(
-                    x=alt.X("hour:O", title="Hodina",
-                            axis=alt.Axis(labelFontSize=11)),
+                    x=alt.X("hour:O", title="Hodina", axis=alt.Axis(labelAngle=0, grid=False)),
                     y=alt.Y("weekday_name:O", title=None,
                             sort=["Po", "Út", "St", "Čt", "Pá", "So", "Ne"],
-                            axis=alt.Axis(labelFontSize=12, labelFontWeight="bold")),
+                            axis=alt.Axis(labelFontSize=12, grid=False)),
                     color=alt.Color(
                         "avg_price:Q", title="CZK/MWh",
-                        scale=alt.Scale(scheme="redyellowgreen", reverse=True),
-                        legend=alt.Legend(gradientLength=200, orient="right"),
+                        scale=alt.Scale(range=LEVEL_RANGE),
+                        legend=alt.Legend(gradientLength=220, orient="bottom",
+                                          direction="horizontal"),
                     ),
                     tooltip=[
                         alt.Tooltip("weekday_name:O", title="Den"),
@@ -1120,50 +1229,44 @@ def show_analysis_tab() -> None:
                         alt.Tooltip("avg_price:Q", title="Průměr CZK/MWh", format=",.0f"),
                     ],
                 )
-                .properties(height=220)
+                .properties(height=250, width="container")
             )
-            st.altair_chart(heatmap, use_container_width=True)
-
-    st.markdown("---")
+            with card("Heatmapa: hodina × den v týdnu", "Průměrná cena za 60 dní",
+                      icon="table", tone="readout"):
+                show_chart(heatmap)
 
     # ── Negativní ceny ──
-    st.subheader("Negativní ceny")
     neg_stats_30 = get_negative_price_stats(conn, days_back=30)
     neg_stats_7 = get_negative_price_stats(conn, days_back=7)
+    with card("Negativní ceny", "Hodiny se zápornou cenou", icon="down", tone="battery"):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Negativní hodiny (30 dní)", neg_stats_30.count)
+        with col2:
+            st.metric("Negativní hodiny (7 dní)", neg_stats_7.count)
+        with col3:
+            if neg_stats_30.min_price is not None:
+                st.metric("Nejnižší cena", f"{neg_stats_30.min_price:,.0f} CZK/MWh")
+            else:
+                st.metric("Nejnižší cena", "—")
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Negativní hodiny (30 dní)", neg_stats_30.count)
-    with col2:
-        st.metric("Negativní hodiny (7 dní)", neg_stats_7.count)
-    with col3:
-        if neg_stats_30.min_price is not None:
-            st.metric("Nejnižší cena", f"{neg_stats_30.min_price:,.0f} CZK/MWh")
-        else:
-            st.metric("Nejnižší cena", "—")
+        risky_hours = get_negative_price_forecast(conn)
+        if risky_hours:
+            hours_str = ", ".join(f"{h}:00" for h in risky_hours)
+            st.html(status_box("Zítra", "Riziko negativních cen", f"kolem {hours_str}",
+                               "battery"))
 
-    risky_hours = get_negative_price_forecast(conn)
-    if risky_hours:
-        hours_str = ", ".join(f"{h}:00" for h in risky_hours)
-        st.warning(f"⚠️ Riziko negativních cen zítra kolem: {hours_str}")
-
-    hours_dist = neg_stats_30.hours_distribution
-    if hours_dist:
-        dist_df = pd.DataFrame([
-            {"Hodina": h, "Počet": c}
-            for h, c in sorted(hours_dist.items())
-        ])
-        dist_chart = (
-            alt.Chart(dist_df)
-            .mark_bar(color="#EF4444", cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
-            .encode(
-                x=alt.X("Hodina:O", title="Hodina"),
-                y=alt.Y("Počet:Q", title="Výskytů"),
-                tooltip=["Hodina", "Počet"],
-            )
-            .properties(height=180, title="Typické hodiny s negativními cenami")
-        )
-        st.altair_chart(dist_chart, use_container_width=True)
+        hours_dist = neg_stats_30.hours_distribution
+        if hours_dist:
+            # Všechny hodiny dne, aby čára nespojovala vzdálené hodiny přes mezeru
+            dist_df = pd.DataFrame([
+                {"Hodina": h, "Počet": hours_dist.get(h, 0)} for h in range(24)
+            ])
+            st.caption("Typické hodiny s negativními cenami")
+            show_chart(hour_line_chart(
+                dist_df, "Hodina:O", "Počet:Q", "Výskytů", BATTERY,
+                tooltip=["Hodina", "Počet"], height=180, y_format="d", interpolate="linear",
+            ))
 
     neg_hours = get_negative_price_hours_list(conn, days_back=30)
     if neg_hours:
@@ -1175,84 +1278,81 @@ def show_analysis_tab() -> None:
             ])
             st.dataframe(neg_df, use_container_width=True, hide_index=True)
 
-    st.markdown("---")
-
     # ── Cenové trendy ──
-    st.subheader("Cenové trendy")
-
     distribution = get_price_distribution(conn, days_back=30)
     trend = get_price_trend(conn, days_back=30)
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        median = distribution.percentiles.get("p50")
-        st.metric("Medián (30 dní)", f"{median:,.0f} CZK/MWh" if median else "—")
-    with col2:
-        change = trend.change_percent
-        st.metric("Trend", trend.direction,
-                  delta=f"{change:+.1f}%" if change is not None else None,
-                  delta_color="inverse")
-    with col3:
-        p90 = distribution.percentiles.get("p90")
-        st.metric("90. percentil", f"{p90:,.0f} CZK/MWh" if p90 else "—")
+    with card("Cenové trendy", "Distribuce cen a klouzavé průměry", icon="line", tone="home"):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            median = distribution.percentiles.get("p50")
+            st.metric("Medián (30 dní)", f"{median:,.0f} CZK/MWh" if median else "—")
+        with col2:
+            change = trend.change_percent
+            st.metric("Trend", trend.direction,
+                      delta=f"{change:+.1f}%" if change is not None else None,
+                      delta_color="inverse")
+        with col3:
+            p90 = distribution.percentiles.get("p90")
+            st.metric("90. percentil", f"{p90:,.0f} CZK/MWh" if p90 else "—")
 
-    # Histogram
-    if distribution.bins and distribution.counts:
-        hist_df = pd.DataFrame({"Pásmo": distribution.bins, "Počet": distribution.counts})
-        hist_chart = (
-            alt.Chart(hist_df)
-            .mark_bar(color="#6366F1", cornerRadiusTopLeft=2, cornerRadiusTopRight=2)
-            .encode(
-                x=alt.X("Pásmo:N", title="Cena (CZK/MWh)", sort=None,
-                        axis=alt.Axis(labelAngle=-45, labelFontSize=10)),
-                y=alt.Y("Počet:Q", title="Počet 15min intervalů"),
-                tooltip=["Pásmo", "Počet"],
-            )
-            .properties(height=220, title="Distribuce cen — histogram (30 dní)")
-        )
-        st.altair_chart(hist_chart, use_container_width=True)
-
-    # Klouzavé průměry
-    if days_count >= 14:
-        ma_data = get_moving_averages(conn, days_back=60)
-        if ma_data:
-            ma_df = pd.DataFrame([
-                {"Datum": d.date, "Denní průměr": d.daily_avg, "7denní MA": d.ma7, "30denní MA": d.ma30}
-                for d in ma_data
-            ])
-            ma_long = ma_df.melt(
-                id_vars=["Datum"],
-                value_vars=["Denní průměr", "7denní MA", "30denní MA"],
-                var_name="Typ", value_name="Cena",
-            ).dropna(subset=["Cena"])
-
-            trend_chart = (
-                alt.Chart(ma_long)
-                .mark_line()
+        # Histogram
+        if distribution.bins and distribution.counts:
+            hist_df = pd.DataFrame({"Pásmo": distribution.bins, "Počet": distribution.counts})
+            hist_chart = (
+                alt.Chart(hist_df)
+                .mark_bar(color=HOME, fillOpacity=0.4, stroke=HOME, strokeWidth=1.5)
                 .encode(
-                    x=alt.X("Datum:T", title="Datum"),
-                    y=alt.Y("Cena:Q", title="CZK/MWh", axis=alt.Axis(format=",.0f")),
-                    color=alt.Color("Typ:N", scale=alt.Scale(
-                        domain=["Denní průměr", "7denní MA", "30denní MA"],
-                        range=["#374151", "#3B82F6", "#F97316"],
-                    ), legend=alt.Legend(orient="bottom")),
-                    strokeWidth=alt.condition(
-                        alt.datum.Typ == "Denní průměr", alt.value(1), alt.value(2.5)
-                    ),
-                    opacity=alt.condition(
-                        alt.datum.Typ == "Denní průměr", alt.value(0.6), alt.value(1)
-                    ),
-                    tooltip=["Datum:T", "Typ:N", alt.Tooltip("Cena:Q", format=",.0f")],
+                    x=alt.X("Pásmo:N", title="Cena (CZK/MWh)", sort=None,
+                            axis=alt.Axis(labelAngle=-45, labelFontSize=10, grid=False)),
+                    y=alt.Y("Počet:Q", title="Počet 15min intervalů"),
+                    tooltip=["Pásmo", "Počet"],
                 )
-                .properties(height=280, title="Vývoj cen s klouzavými průměry")
-                .interactive()
+                .properties(height=220, width="container",
+                            title="Distribuce cen — histogram (30 dní)")
             )
-            st.altair_chart(trend_chart, use_container_width=True)
+            show_chart(hist_chart)
+
+        # Klouzavé průměry
+        if days_count >= 14:
+            ma_data = get_moving_averages(conn, days_back=60)
+            if ma_data:
+                ma_df = pd.DataFrame([
+                    {"Datum": d.date, "Denní průměr": d.daily_avg, "7denní MA": d.ma7,
+                     "30denní MA": d.ma30}
+                    for d in ma_data
+                ])
+                ma_long = ma_df.melt(
+                    id_vars=["Datum"],
+                    value_vars=["Denní průměr", "7denní MA", "30denní MA"],
+                    var_name="Typ", value_name="Cena",
+                ).dropna(subset=["Cena"])
+
+                encode = {
+                    "x": alt.X("Datum:T", title=None, axis=alt.Axis(format="%d.%m.")),
+                    "y": alt.Y("Cena:Q", title="CZK/MWh", axis=alt.Axis(format=",.0f")),
+                    "color": alt.Color("Typ:N", scale=alt.Scale(
+                        domain=["Denní průměr", "7denní MA", "30denní MA"],
+                        range=["#5f6b84", ACCENT, SOLAR],
+                    ), legend=alt.Legend(title=None, orient="bottom")),
+                }
+                base = alt.Chart(ma_long)
+                glow = base.transform_filter(alt.datum.Typ != "Denní průměr").mark_line(
+                    strokeWidth=7, opacity=0.16).encode(**encode)
+                lines = base.mark_line().encode(
+                    **encode,
+                    strokeWidth=alt.condition(alt.datum.Typ == "Denní průměr", alt.value(1.2),
+                                              alt.value(2.4)),
+                    tooltip=[alt.Tooltip("Datum:T", format="%d.%m.%Y"), "Typ:N",
+                             alt.Tooltip("Cena:Q", format=",.0f")],
+                )
+                show_chart(alt.layer(glow, lines).properties(
+                    height=280, width="container", title="Vývoj cen s klouzavými průměry"))
 
     conn.close()
 
 
-# ─── TAB: Profily & Riziko ───────────────────────────────────────────────────
+# ─── Profily & riziko ────────────────────────────────────────────────────────
 
 def show_profiles_tab() -> None:
     conn = get_connection()
@@ -1273,50 +1373,46 @@ def show_profiles_tab() -> None:
     )
 
     # ── Benchmark ──
-    st.subheader("Aktuální cenový benchmark")
-    try:
-        prices, _ = fetch_spot_prices(date.today())
-        current = get_current_price(prices)
-        if current:
-            bm = get_current_benchmark(conn, current.price_czk)
-            color = PRICE_COLORS.get(bm.classification, "#6B7280")
+    with card("Aktuální cenový benchmark", "Spot teď vs. průměry 7 a 30 dní", icon="gauge",
+              tone="solar"):
+        try:
+            prices, _ = fetch_spot_prices(date.today())
+            current = get_current_price(prices)
+            if current:
+                bm = get_current_benchmark(conn, current.price_czk)
 
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric("Aktuální cena", f"{bm.current_price:,.0f} CZK/MWh")
-            with col2:
-                st.metric("Průměr 7 dní", f"{bm.avg_7d:,.0f} CZK/MWh")
-            with col3:
-                st.metric("Průměr 30 dní", f"{bm.avg_30d:,.0f} CZK/MWh")
-            with col4:
-                st.metric("Percentil", f"{bm.percentile_rank}.")
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Aktuální cena", f"{bm.current_price:,.0f} CZK/MWh")
+                with col2:
+                    st.metric("Průměr 7 dní", f"{bm.avg_7d:,.0f} CZK/MWh")
+                with col3:
+                    st.metric("Průměr 30 dní", f"{bm.avg_30d:,.0f} CZK/MWh")
+                with col4:
+                    st.metric("Percentil", f"{bm.percentile_rank}.")
 
-            st.markdown(
-                f"<div style='padding:12px 20px; background:{color}20; border:1px solid {color}; "
-                f"border-radius:10px; text-align:center; color:{color}; font-weight:700; "
-                f"font-size:1.1rem; margin-top:8px;'>{bm.classification.upper()}</div>",
-                unsafe_allow_html=True,
-            )
+                st.html(status_box("Hladina", bm.classification.upper(),
+                                   f"{bm.percentile_rank}. percentil za 30 dní",
+                                   LEVEL_TONE_BY_NAME.get(bm.classification, "muted")))
 
-            if bm.vs_yesterday_pct is not None or bm.vs_last_week_pct is not None:
-                c1, c2 = st.columns(2)
-                with c1:
-                    if bm.vs_yesterday_pct is not None:
-                        st.metric("Vs. včera", "", delta=f"{bm.vs_yesterday_pct:+.1f}%",
-                                  delta_color="inverse")
-                with c2:
-                    if bm.vs_last_week_pct is not None:
-                        st.metric("Vs. minulý týden", "", delta=f"{bm.vs_last_week_pct:+.1f}%",
-                                  delta_color="inverse")
-        else:
-            st.info("Aktuální cena není k dispozici.")
-    except Exception:
-        st.info("Nelze načíst aktuální cenu z API.")
-
-    st.markdown("---")
+                if bm.vs_yesterday_pct is not None or bm.vs_last_week_pct is not None:
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        if bm.vs_yesterday_pct is not None:
+                            st.metric("Vs. včera", f"{bm.vs_yesterday_pct:+.1f} %",
+                                      delta=f"{bm.vs_yesterday_pct:+.1f}%",
+                                      delta_color="inverse")
+                    with c2:
+                        if bm.vs_last_week_pct is not None:
+                            st.metric("Vs. minulý týden", f"{bm.vs_last_week_pct:+.1f} %",
+                                      delta=f"{bm.vs_last_week_pct:+.1f}%",
+                                      delta_color="inverse")
+            else:
+                st.info("Aktuální cena není k dispozici.")
+        except Exception:
+            st.info("Nelze načíst aktuální cenu z API.")
 
     # ── Spotřebitelské profily ──
-    st.subheader("Spotřebitelské profily")
     profiles = get_all_profiles_comparison(conn)
 
     if profiles:
@@ -1330,116 +1426,111 @@ def show_profiles_tab() -> None:
 
         chart = (
             alt.Chart(profile_df)
-            .mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4)
+            .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6, fillOpacity=0.35,
+                      strokeWidth=2, size=46)
             .encode(
-                x=alt.X("Profil:N", sort=None, axis=alt.Axis(labelFontSize=12)),
+                x=alt.X("Profil:N", sort=None, title=None,
+                        axis=alt.Axis(labelFontSize=12, labelAngle=0, grid=False)),
                 y=alt.Y("Cena (CZK/MWh):Q", title="Průměrná cena (CZK/MWh)",
                         axis=alt.Axis(format=",.0f")),
                 color=alt.condition(
                     alt.datum["Úspora (%)"] > 0,
-                    alt.value("#22C55E"),
-                    alt.value("#EF4444"),
+                    alt.value(BATTERY),
+                    alt.value(GRID),
+                ),
+                stroke=alt.condition(
+                    alt.datum["Úspora (%)"] > 0,
+                    alt.value(BATTERY),
+                    alt.value(GRID),
                 ),
                 tooltip=["Profil", "Popis", "Cena (CZK/MWh)", "Úspora (%)", "Nejlevnější den"],
             )
-            .properties(height=280, title="Průměrná cena spotřeby podle profilu")
+            .properties(height=280, width="container")
         )
-        st.altair_chart(chart, use_container_width=True)
-
         best = profiles[0]
-        st.success(
-            f"**Doporučený profil:** {best.name} — "
-            f"úspora {best.savings_vs_flat_pct:+.1f}% oproti flat tarifu"
-        )
-        st.dataframe(profile_df, use_container_width=True, hide_index=True)
-
-    st.markdown("---")
+        with card("Spotřebitelské profily", "Průměrná cena spotřeby podle profilu",
+                  icon="home", tone="home",
+                  aside=pill(f"doporučeno: {best.name}", "battery")):
+            show_chart(chart)
+            st.html(status_box(
+                "Doporučený profil", best.name,
+                f"úspora {best.savings_vs_flat_pct:+.1f} % oproti flat tarifu", "battery",
+            ))
+            st.dataframe(profile_df, use_container_width=True, hide_index=True)
 
     # ── Volatilita ──
-    st.subheader("Volatilita a riziko")
     metrics = get_volatility_metrics(conn)
 
     if metrics.volatility_trend != "nedostatek dat":
-        c1, c2, c3, c4, c5 = st.columns(5)
-        with c1:
-            st.metric("Denní volatilita", f"{metrics.daily_volatility:,.0f} CZK",
-                      help="Směrodatná odchylka denních průměrů")
-        with c2:
-            st.metric("Intraday volatilita", f"{metrics.intraday_volatility:,.0f} CZK")
-        with c3:
-            st.metric("Prům. denní rozpětí", f"{metrics.avg_daily_swing:,.0f} CZK")
-        with c4:
-            st.metric("Max denní rozpětí", f"{metrics.max_daily_swing:,.0f} CZK")
-        with c5:
-            icons = {"rostoucí": "📈", "klesající": "📉", "stabilní": "➡️"}
-            st.metric("Trend volatility",
-                      f"{icons.get(metrics.volatility_trend, '')} {metrics.volatility_trend}")
+        with card("Volatilita a riziko", "Jak moc ceny kolísají", icon="activity", tone="grid"):
+            c1, c2, c3, c4, c5 = st.columns(5)
+            with c1:
+                st.metric("Denní volatilita", f"{metrics.daily_volatility:,.0f} CZK",
+                          help="Směrodatná odchylka denních průměrů")
+            with c2:
+                st.metric("Intraday volatilita", f"{metrics.intraday_volatility:,.0f} CZK")
+            with c3:
+                st.metric("Prům. denní rozpětí", f"{metrics.avg_daily_swing:,.0f} CZK")
+            with c4:
+                st.metric("Max denní rozpětí", f"{metrics.max_daily_swing:,.0f} CZK")
+            with c5:
+                st.metric("Trend volatility", metrics.volatility_trend)
 
-        c1, c2 = st.columns(2)
-        with c1:
-            st.metric("VaR 95%", f"{metrics.var_95:,.0f} CZK/MWh",
-                      help="95 % cen je pod touto hodnotou")
-        with c2:
-            st.metric("VaR 99%", f"{metrics.var_99:,.0f} CZK/MWh")
-
-    st.markdown("---")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.metric("VaR 95%", f"{metrics.var_95:,.0f} CZK/MWh",
+                          help="95 % cen je pod touto hodnotou")
+            with c2:
+                st.metric("VaR 99%", f"{metrics.var_99:,.0f} CZK/MWh")
 
     # ── Cenové špičky ──
-    st.subheader("Cenové špičky")
     peak_analysis = get_peak_analysis(conn)
 
-    if peak_analysis.total_peaks_30d > 0:
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.metric("Hranice špičky (P90)", f"{peak_analysis.threshold_p90:,.0f} CZK/MWh")
-        with c2:
-            st.metric("Špičky za 30 dní", peak_analysis.total_peaks_30d)
-        with c3:
-            risky_str = ", ".join(f"{h}:00" for h in peak_analysis.most_risky_hours[:3])
-            st.metric("Nejrizikovější hodiny", risky_str)
+    with card("Cenové špičky", "Intervaly nad 90. percentilem", icon="up", tone="readout"):
+        if peak_analysis.total_peaks_30d > 0:
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.metric("Hranice špičky (P90)", f"{peak_analysis.threshold_p90:,.0f} CZK/MWh")
+            with c2:
+                st.metric("Špičky za 30 dní", peak_analysis.total_peaks_30d)
+            with c3:
+                risky_str = ", ".join(f"{h}:00" for h in peak_analysis.most_risky_hours[:3])
+                st.metric("Nejrizikovější hodiny", risky_str)
 
-        probs = get_peak_probability_by_hour(conn)
-        prob_df = pd.DataFrame([
-            {"Hodina": h, "Pravděpodobnost (%)": p * 100}
-            for h, p in probs.items()
-        ])
-
-        prob_chart = (
-            alt.Chart(prob_df)
-            .mark_bar(cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
-            .encode(
-                x=alt.X("Hodina:O", title="Hodina"),
-                y=alt.Y("Pravděpodobnost (%):Q", title="Pravděpodobnost (%)"),
-                color=alt.Color("Pravděpodobnost (%):Q",
-                                scale=alt.Scale(scheme="redyellowgreen", reverse=True),
-                                legend=None),
+            probs = get_peak_probability_by_hour(conn)
+            prob_df = pd.DataFrame([
+                {"Hodina": h, "Pravděpodobnost (%)": p * 100}
+                for h, p in probs.items()
+            ])
+            st.caption("Pravděpodobnost cenové špičky podle hodiny")
+            show_chart(hour_line_chart(
+                prob_df, "Hodina:O", "Pravděpodobnost (%):Q", "%", READOUT,
                 tooltip=["Hodina", alt.Tooltip("Pravděpodobnost (%):Q", format=".1f")],
-            )
-            .properties(height=220, title="Pravděpodobnost cenové špičky podle hodiny")
-        )
-        st.altair_chart(prob_chart, use_container_width=True)
+                height=220,
+            ))
 
-        st.subheader("Predikce špiček pro zítřek")
-        predictions = predict_peaks_tomorrow(conn)
-        risky = [p for p in predictions if p.probability >= 0.2]
+            st.markdown("### Predikce špiček pro zítřek")
+            predictions = predict_peaks_tomorrow(conn)
+            risky = [p for p in predictions if p.probability >= 0.2]
 
-        if risky:
-            pred_df = pd.DataFrame([{
-                "Hodina": f"{p.hour:02d}:00",
-                "Pravděpodobnost (%)": round(p.probability * 100, 1),
-                "Očekávaná cena": f"{p.expected_price:,.0f} CZK/MWh",
-                "Riziko": p.risk_level,
-            } for p in sorted(risky, key=lambda x: x.probability, reverse=True)])
-            st.dataframe(pred_df, use_container_width=True, hide_index=True)
+            if risky:
+                pred_df = pd.DataFrame([{
+                    "Hodina": f"{p.hour:02d}:00",
+                    "Pravděpodobnost (%)": round(p.probability * 100, 1),
+                    "Očekávaná cena": f"{p.expected_price:,.0f} CZK/MWh",
+                    "Riziko": p.risk_level,
+                } for p in sorted(risky, key=lambda x: x.probability, reverse=True)])
+                st.dataframe(pred_df, use_container_width=True, hide_index=True)
+            else:
+                st.html(status_box("Zítra", "Bez výrazných špiček",
+                                   "žádná hodina nemá pravděpodobnost ≥ 20 %", "battery"))
         else:
-            st.success("Zítra se neočekávají výrazné cenové špičky.")
-    else:
-        st.info("Žádné cenové špičky za posledních 30 dní.")
+            st.info("Žádné cenové špičky za posledních 30 dní.")
 
     conn.close()
 
 
-# ─── TAB: Predikce ──────────────────────────────────────────────────────────
+# ─── Predikce ────────────────────────────────────────────────────────────────
 
 def show_forecast_tab() -> None:
     conn = get_connection()
@@ -1459,51 +1550,45 @@ def show_forecast_tab() -> None:
         ("Hodinové vzorce", sufficiency.can_show_hourly_patterns),
         ("Statistická predikce", sufficiency.can_show_statistical_forecast),
     ]:
-        icon = "✅" if ok else "❌"
-        st.sidebar.markdown(f"{icon} {label}")
+        st.sidebar.html(pill(("✓ " if ok else "✕ ") + label, "battery" if ok else "grid"))
 
     # ── Zítřejší ceny ──
-    st.subheader("Zítřejší ceny (D+1)")
-    st.caption("Day-ahead ceny publikované OTE — obvykle kolem 13:00 CET")
-
     with st.spinner("Načítám zítřejší ceny..."):
         tomorrow_prices, eur_czk_rate, available = get_tomorrow_prices()
 
-    if available and tomorrow_prices:
-        tomorrow = date.today() + timedelta(days=1)
-        df = load_prices_as_df(tomorrow_prices)
+    tomorrow = date.today() + timedelta(days=1)
+    with card("Zítřejší ceny (D+1)", "Day-ahead ceny OTE — obvykle kolem 13:00",
+              icon="calendar", tone="solar",
+              aside=pill(f"{tomorrow:%d. %m. %Y}", "muted")):
+        if available and tomorrow_prices:
+            df = load_prices_as_df(tomorrow_prices)
 
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("Minimum", f"{df['Cena (CZK/MWh)'].min():,.0f} CZK/MWh")
-        with col2:
-            st.metric("Maximum", f"{df['Cena (CZK/MWh)'].max():,.0f} CZK/MWh")
-        with col3:
-            st.metric("Průměr", f"{df['Cena (CZK/MWh)'].mean():,.0f} CZK/MWh")
-        with col4:
-            st.metric("Kurz EUR/CZK", f"{eur_czk_rate:.2f}")
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Minimum", f"{df['Cena (CZK/MWh)'].min():,.0f} CZK/MWh")
+            with col2:
+                st.metric("Maximum", f"{df['Cena (CZK/MWh)'].max():,.0f} CZK/MWh")
+            with col3:
+                st.metric("Průměr", f"{df['Cena (CZK/MWh)'].mean():,.0f} CZK/MWh")
+            with col4:
+                st.metric("Kurz EUR/CZK", f"{eur_czk_rate:.2f}")
 
-        st.altair_chart(colored_bar_chart(df, height=320), use_container_width=True)
+            show_chart(spot_price_chart(df, tomorrow, height=320))
+            st.html(level_legend())
 
-        with st.expander("Tabulka"):
-            st.dataframe(df[["Hodina", "Cena (CZK/MWh)", "Cena (EUR/MWh)"]],
-                         use_container_width=True, hide_index=True)
-    else:
-        st.info("Zítřejší ceny zatím nejsou publikovány (OTE zveřejňuje kolem 13:00 CET).")
-
-    st.markdown("---")
+            with st.expander("Tabulka"):
+                st.dataframe(df[["Hodina", "Cena (CZK/MWh)", "Cena (EUR/MWh)"]],
+                             use_container_width=True, hide_index=True)
+        else:
+            st.info("Zítřejší ceny zatím nejsou publikovány (OTE zveřejňuje kolem 13:00 CET).")
 
     # ── Prognóza D+2 až D+7 ──
-    st.subheader("Statistická prognóza D+2 až D+7")
-
     if not sufficiency.can_show_hourly_patterns:
         st.warning(f"Pro prognózu je potřeba alespoň 7 dnů dat. Aktuálně {sufficiency.total_days}.")
         conn.close()
         return
 
     method = "Statistická predikce" if sufficiency.can_show_statistical_forecast else "Hodinové vzorce"
-    st.caption(f"Metoda: {method}")
-
     forecasts = get_forecast_for_days(conn, days_ahead=7)
     if not forecasts:
         st.info("Nedostatek dat pro prognózu.")
@@ -1511,86 +1596,55 @@ def show_forecast_tab() -> None:
         return
 
     # Souhrnný přehled všech dní
-    summary_data = []
-    for target_date, day_forecasts in forecasts.items():
-        day_prices = [f.price_czk for f in day_forecasts]
-        summary_data.append({
+    summary_df = pd.DataFrame([
+        {
             "Datum": target_date,
-            "Den": target_date.strftime("%a %d.%m"),
-            "Min": min(day_prices),
-            "Max": max(day_prices),
-            "Průměr": sum(day_prices) / len(day_prices),
-        })
+            "Den": f"{WEEKDAY_CZ[target_date.weekday()]} {target_date:%d.%m.}",
+            "Min": min(f.price_czk for f in day_forecasts),
+            "Max": max(f.price_czk for f in day_forecasts),
+            "Průměr": sum(f.price_czk for f in day_forecasts) / len(day_forecasts),
+        }
+        for target_date, day_forecasts in forecasts.items()
+    ])
 
-    summary_df = pd.DataFrame(summary_data)
+    with card("Statistická prognóza D+2 až D+7", f"Metoda: {method} · pásmo = min–max dne",
+              icon="sparkles", tone="home"):
+        show_chart(range_line_chart(summary_df, "Datum:T", "CZK/MWh", HOME, height=260,
+                                    label_field="Den:N"))
 
-    band = (
-        alt.Chart(summary_df)
-        .mark_area(opacity=0.15, color="#8B5CF6")
-        .encode(
-            x=alt.X("Datum:T"),
-            y=alt.Y("Min:Q", title="CZK/MWh", axis=alt.Axis(format=",.0f")),
-            y2=alt.Y2("Max:Q"),
-        )
-    )
-    line = (
-        alt.Chart(summary_df)
-        .mark_line(color="#8B5CF6", strokeWidth=2.5, point=True)
-        .encode(
-            x=alt.X("Datum:T", title="Datum"),
-            y=alt.Y("Průměr:Q"),
-            tooltip=[
-                alt.Tooltip("Den:N", title="Den"),
-                alt.Tooltip("Průměr:Q", title="Průměr", format=",.0f"),
-                alt.Tooltip("Min:Q", title="Min", format=",.0f"),
-                alt.Tooltip("Max:Q", title="Max", format=",.0f"),
-            ],
-        )
-    )
-    st.altair_chart(
-        (band + line).properties(height=260, title="Prognóza průměrné ceny D+2 až D+7").interactive(),
-        use_container_width=True,
-    )
+        # Detail po dnech
+        for target_date, day_forecasts in forecasts.items():
+            with st.expander(f"{WEEKDAY_FULL[target_date.weekday()]} {target_date:%d.%m.%Y}",
+                             expanded=False):
+                forecast_df = pd.DataFrame([{
+                    "Slot": slot_key(target_date, f.time_from),
+                    "Hodina": f.time_from.strftime("%H:%M"),
+                    "Predikce (CZK/MWh)": f.price_czk,
+                    "Min": f.confidence_low,
+                    "Max": f.confidence_high,
+                } for f in day_forecasts])
 
-    # Detail po dnech
-    for target_date, day_forecasts in forecasts.items():
-        with st.expander(target_date.strftime("%A %d.%m.%Y"), expanded=False):
-            forecast_df = pd.DataFrame([{
-                "Hodina": f.time_from.strftime("%H:%M"),
-                "Predikce (CZK/MWh)": f.price_czk,
-                "Min": f.confidence_low,
-                "Max": f.confidence_high,
-            } for f in day_forecasts])
+                c1, c2, c3 = st.columns(3)
+                pred_col = "Predikce (CZK/MWh)"
+                with c1:
+                    st.metric("Min", f"{forecast_df[pred_col].min():,.0f} CZK/MWh")
+                with c2:
+                    st.metric("Max", f"{forecast_df[pred_col].max():,.0f} CZK/MWh")
+                with c3:
+                    st.metric("Průměr", f"{forecast_df[pred_col].mean():,.0f} CZK/MWh")
 
-            c1, c2, c3 = st.columns(3)
-            pred_col = "Predikce (CZK/MWh)"
-            with c1:
-                st.metric("Min", f"{forecast_df[pred_col].min():,.0f} CZK/MWh")
-            with c2:
-                st.metric("Max", f"{forecast_df[pred_col].max():,.0f} CZK/MWh")
-            with c3:
-                st.metric("Průměr", f"{forecast_df[pred_col].mean():,.0f} CZK/MWh")
-
-            fc_chart = (
-                alt.Chart(forecast_df)
-                .mark_bar(color="#8B5CF6", cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
-                .encode(
-                    x=alt.X("Hodina:N", sort=None, axis=alt.Axis(labelAngle=-45)),
-                    y=alt.Y("Predikce (CZK/MWh):Q", title="CZK/MWh",
-                            axis=alt.Axis(format=",.0f")),
-                    tooltip=["Hodina", alt.Tooltip("Predikce (CZK/MWh):Q", format=",.0f"),
+                show_chart(gradient_line_chart(
+                    forecast_df, pred_col, "CZK/MWh",
+                    tooltip=["Hodina", alt.Tooltip(f"{pred_col}:Q", format=",.0f"),
                              alt.Tooltip("Min:Q", format=",.0f"),
                              alt.Tooltip("Max:Q", format=",.0f")],
-                )
-                .properties(height=220)
-                .interactive()
-            )
-            st.altair_chart(fc_chart, use_container_width=True)
+                    height=220,
+                ))
 
     conn.close()
 
 
-# ─── TAB: Počasí ─────────────────────────────────────────────────────────────
+# ─── Počasí ──────────────────────────────────────────────────────────────────
 
 _SVG_SUN = (
     "<g stroke='#FBBF24' stroke-width='1.6' stroke-linecap='round'>"
@@ -1645,6 +1699,37 @@ def weather_icon(code: int, is_day: bool, size: int = 34, cloud: str = "#CBD5E1"
     return f"<img src='data:image/svg+xml;base64,{data}' width='{size}' height='{size}' alt=''>"
 
 
+WEATHER_CSS = f"""
+<style>
+  .w3-scroll {{ overflow-x:auto; margin-top:6px; }}
+  .w3-grid {{ min-width:560px; }}
+  .w3-row, .w3-heads {{ display:grid; grid-template-columns:76px repeat(8, 1fr); }}
+  .w3-head {{ text-align:center; color:{INK_MUTED}; font-size:12px; padding:6px 0; }}
+  .w3-row {{ background:{SURFACE_RAISED}; border:1px solid {BORDER}; border-radius:14px;
+             margin-top:8px; border-left:4px solid transparent; }}
+  .w3-today {{ border-left-color:{SOLAR}; }}
+  .w3-day {{ display:flex; flex-direction:column; justify-content:center; padding-left:10px; }}
+  .w3-day b {{ font-size:15px; font-weight:600; }}
+  .w3-day span {{ color:{INK_MUTED}; font-size:12.5px; font-weight:500; }}
+  .w3-cell {{ display:flex; flex-direction:column; align-items:center; gap:4px;
+             padding:10px 0 12px; border-left:1px solid {BORDER}; }}
+  .w3-past {{ opacity:0.4; }}
+  .w3-now {{ background:{SOLAR}14; }}
+  .w3-temp {{ font-weight:700; font-size:17px; }}
+  .w3-pill {{ background:#ffffff0d; color:#cbd5e1; border-radius:999px; padding:2px 9px;
+             font-size:11.5px; margin-top:2px; }}
+  .w3-foot {{ color:{INK_MUTED}; font-size:12.5px; margin-top:12px; }}
+  .w3-foot a {{ color:#cbd5e1; }}
+  .w7 {{ display:grid; grid-template-columns:repeat(7, minmax(84px, 1fr)); gap:8px;
+         overflow-x:auto; }}
+  .w7-day {{ background:{SURFACE_RAISED}; border:1px solid {BORDER}; border-radius:14px;
+             padding:12px 6px; display:flex; flex-direction:column; align-items:center; gap:4px; }}
+  .w7-day small {{ color:{INK_MUTED}; font-size:12px; }}
+  .w7-day b {{ font-size:17px; font-weight:700; }}
+</style>
+"""
+
+
 def show_three_hour_weather_card() -> None:
     """Karta „Počasí": předpověď po 3 hodinách na dnes a zítra (obdoba karty v HA)."""
     from ote.weather import ThreeHourBlock, fetch_three_hour_forecast
@@ -1693,49 +1778,24 @@ def show_three_hour_weather_card() -> None:
             f"{''.join(cells)}</div>"
         )
 
-    st.html(f"""
-    <style>
-      .w3-card {{ background:#111827; border:1px solid #374151; border-top:3px solid #F59E0B;
-                 border-radius:16px; padding:18px 18px 14px; font-family:'Inter',sans-serif;
-                 color:#F9FAFB; }}
-      .w3-title {{ display:flex; align-items:center; gap:14px; margin-bottom:10px; }}
-      .w3-badge {{ width:46px; height:46px; border-radius:50%; background:#3B2F1A;
-                  display:flex; align-items:center; justify-content:center; flex:none; }}
-      .w3-title b {{ font-size:1.25rem; }}
-      .w3-title span {{ display:block; color:#94A3B8; font-size:0.95rem; }}
-      .w3-scroll {{ overflow-x:auto; }}
-      .w3-grid {{ min-width:560px; }}
-      .w3-row, .w3-heads {{ display:grid; grid-template-columns:76px repeat(8, 1fr); }}
-      .w3-head {{ text-align:center; color:#94A3B8; font-size:0.8rem; padding:6px 0; }}
-      .w3-row {{ background:#1A2234; border-radius:14px; margin-top:8px; border-left:4px solid transparent; }}
-      .w3-today {{ border-left-color:#F59E0B; }}
-      .w3-day {{ display:flex; flex-direction:column; justify-content:center; padding-left:10px; }}
-      .w3-day b {{ font-size:1rem; }}
-      .w3-day span {{ color:#94A3B8; font-size:0.85rem; font-weight:600; }}
-      .w3-cell {{ display:flex; flex-direction:column; align-items:center; gap:4px;
-                 padding:10px 0 12px; border-left:1px solid #263045; }}
-      .w3-past {{ opacity:0.4; }}
-      .w3-now {{ background:#F59E0B14; }}
-      .w3-temp {{ font-weight:800; font-size:1.15rem; }}
-      .w3-pill {{ background:#2B3548; color:#CBD5E1; border-radius:999px; padding:2px 9px;
-                 font-size:0.78rem; margin-top:2px; }}
-      .w3-foot {{ color:#94A3B8; font-size:0.85rem; margin-top:12px; }}
-      .w3-foot a {{ color:#CBD5E1; }}
-    </style>
-    <div class='w3-card'>
-      <div class='w3-title'>
-        <div class='w3-badge'>{weather_icon(3, True, 28, cloud="#F59E0B")}</div>
-        <div><b>Počasí</b><span>Předpověď po 3 hodinách na dnes a zítra · Kravaře</span></div>
-      </div>
-      <div class='w3-scroll'><div class='w3-grid'>
-        <div class='w3-heads'><div></div>{header}</div>
-        {''.join(rows)}
-      </div></div>
-      <div class='w3-foot'>Teplota = průměr bloku, % = nejvyšší pravděpodobnost srážek v bloku ·
-        aktualizováno {now:%d. %m. %Y %H:%M} · Data o počasí:
-        <a href='https://open-meteo.com/' target='_blank'>Open-Meteo.com</a></div>
-    </div>
-    """)
+    with card("Počasí", "Předpověď po 3 hodinách na dnes a zítra · Kravaře", icon="cloud",
+              tone="solar", accent_top="solar"):
+        st.html(f"""{WEATHER_CSS}
+        <div class='w3-scroll'><div class='w3-grid'>
+          <div class='w3-heads'><div></div>{header}</div>
+          {''.join(rows)}
+        </div></div>
+        <div class='w3-foot'>Teplota = průměr bloku, % = nejvyšší pravděpodobnost srážek
+          v bloku · aktualizováno {now:%d. %m. %Y %H:%M} · Data o počasí:
+          <a href='https://open-meteo.com/' target='_blank'>Open-Meteo.com</a></div>
+        """)
+
+
+WEATHER_TYPE_CODE = {"sunny": 0, "mixed": 2, "cloudy": 3}
+WEATHER_IMPACT = {
+    "sunny": ("↓ levnější", "battery"), "windy": ("↓ levnější", "battery"),
+    "cloudy": ("↑ dražší", "grid"), "mixed": ("~ běžné", "solar"),
+}
 
 
 def show_weather_tab() -> None:
@@ -1747,8 +1807,6 @@ def show_weather_tab() -> None:
 
     show_three_hour_weather_card()
 
-    st.subheader("Předpověď počasí — Kravaře (7 dní)")
-
     try:
         with st.spinner("Načítám předpověď počasí..."):
             weather_forecasts = fetch_weather_forecast(days_ahead=7)
@@ -1756,75 +1814,48 @@ def show_weather_tab() -> None:
         if weather_forecasts:
             weather_df = pd.DataFrame([{
                 "Datum": f.date,
-                "Den": f.date.strftime("%a %d.%m"),
+                "Den": f"{WEEKDAY_CZ[f.date.weekday()]} {f.date:%d.%m.}",
                 "Typ": f.weather_type,
                 "Teplota (°C)": f.avg_temperature,
                 "Oblačnost (%)": f.avg_cloud_cover,
                 "Vítr (m/s)": f.avg_wind_speed,
-                "Vliv na ceny": {"sunny": "↓ nižší", "windy": "↓ nižší",
-                                  "cloudy": "↑ vyšší", "mixed": "~ běžné"}.get(f.weather_type, "?"),
             } for f in weather_forecasts])
 
-            # Ikony počasí jako karty
-            cols = st.columns(len(weather_forecasts))
-            type_icon = {"sunny": "☀️", "cloudy": "☁️", "windy": "💨", "mixed": "🌤️"}
-            impact_color = {"sunny": "#22C55E", "windy": "#22C55E", "cloudy": "#EF4444", "mixed": "#EAB308"}
-            for i, (col, f) in enumerate(zip(cols, weather_forecasts)):
-                with col:
-                    color = impact_color.get(f.weather_type, "#6B7280")
-                    st.markdown(
-                        f"<div style='background:#1F2937;border:1px solid #374151;border-radius:10px;"
-                        f"padding:12px 8px;text-align:center;'>"
-                        f"<div style='font-size:0.75rem;color:#9CA3AF;'>{f.date.strftime('%a %d.%m')}</div>"
-                        f"<div style='font-size:1.8rem;margin:4px 0'>{type_icon.get(f.weather_type,'?')}</div>"
-                        f"<div style='font-weight:700;font-size:1rem'>{f.avg_temperature:.0f}°C</div>"
-                        f"<div style='font-size:0.75rem;color:{color};margin-top:4px'>"
-                        f"{'↓ levnější' if f.weather_type in ('sunny','windy') else '↑ dražší' if f.weather_type == 'cloudy' else '~ běžné'}"
-                        f"</div></div>",
-                        unsafe_allow_html=True,
-                    )
-
-            st.markdown("")
-
-            col1, col2 = st.columns(2)
-            with col1:
-                temp_chart = (
-                    alt.Chart(weather_df)
-                    .mark_area(color="#F97316", opacity=0.15, line={"color": "#F97316", "strokeWidth": 2})
-                    .encode(
-                        x=alt.X("Datum:T", title="Datum"),
-                        y=alt.Y("Teplota (°C):Q", title="Teplota (°C)"),
-                        tooltip=[alt.Tooltip("Den:N"), alt.Tooltip("Teplota (°C):Q", format=".1f")],
-                    )
-                    .properties(height=200, title="Teplota")
+            tiles = []
+            for f in weather_forecasts:
+                text, tone = WEATHER_IMPACT.get(f.weather_type, ("?", "muted"))
+                icon = (icon_img("wind", ACCENT_INK, 30) if f.weather_type == "windy"
+                        else weather_icon(WEATHER_TYPE_CODE.get(f.weather_type, 2), True, 34))
+                tiles.append(
+                    f"<div class='w7-day'><small>{WEEKDAY_CZ[f.date.weekday()]} "
+                    f"{f.date:%d.%m.}</small>{icon}<b>{f.avg_temperature:.0f}°C</b>"
+                    f"{pill(text, tone)}</div>"
                 )
-                st.altair_chart(temp_chart, use_container_width=True)
 
-            with col2:
-                cloud_chart = (
-                    alt.Chart(weather_df)
-                    .mark_bar(color="#3B82F6", cornerRadiusTopLeft=3, cornerRadiusTopRight=3)
-                    .encode(
-                        x=alt.X("Datum:T", title="Datum"),
-                        y=alt.Y("Oblačnost (%):Q", title="Oblačnost (%)"),
-                        tooltip=[alt.Tooltip("Den:N"), alt.Tooltip("Oblačnost (%):Q", format=".0f")],
-                    )
-                    .properties(height=200, title="Oblačnost")
-                )
-                st.altair_chart(cloud_chart, use_container_width=True)
+            with card("Předpověď na 7 dní", "Kravaře · průměr dne a odhad vlivu na ceny",
+                      icon="cloud_sun", tone="accent"):
+                st.html(f"{WEATHER_CSS}<div class='w7'>{''.join(tiles)}</div>")
 
-            wind_chart = (
-                alt.Chart(weather_df)
-                .mark_line(color="#22C55E", strokeWidth=2, point={"filled": True, "size": 50})
-                .encode(
-                    x=alt.X("Datum:T", title="Datum"),
-                    y=alt.Y("Vítr (m/s):Q", title="Rychlost větru (m/s)"),
+                col1, col2 = st.columns(2)
+                with col1:
+                    show_chart(hour_line_chart(
+                        weather_df, "Den:N", "Teplota (°C):Q", "°C", SOLAR,
+                        tooltip=[alt.Tooltip("Den:N"),
+                                 alt.Tooltip("Teplota (°C):Q", format=".1f")],
+                        height=200, y_format=".0f",
+                    ).properties(title="Teplota"))
+                with col2:
+                    show_chart(hour_line_chart(
+                        weather_df, "Den:N", "Oblačnost (%):Q", "%", ACCENT_INK,
+                        tooltip=[alt.Tooltip("Den:N"),
+                                 alt.Tooltip("Oblačnost (%):Q", format=".0f")],
+                        height=200,
+                    ).properties(title="Oblačnost"))
+                show_chart(hour_line_chart(
+                    weather_df, "Den:N", "Vítr (m/s):Q", "m/s", BATTERY,
                     tooltip=[alt.Tooltip("Den:N"), alt.Tooltip("Vítr (m/s):Q", format=".1f")],
-                )
-                .properties(height=160, title="Rychlost větru")
-                .interactive()
-            )
-            st.altair_chart(wind_chart, use_container_width=True)
+                    height=170, y_format=".1f",
+                ).properties(title="Rychlost větru"))
 
         else:
             st.warning("Nepodařilo se načíst předpověď počasí.")
@@ -1832,119 +1863,90 @@ def show_weather_tab() -> None:
     except Exception as e:
         st.error(f"Chyba: {e}")
 
-    st.markdown("---")
-
     # ── Korelace ──
-    st.subheader("Korelace počasí a cen elektřiny")
-
     conn = get_connection()
     days_count = get_data_days_count(conn)
 
-    if days_count >= 14:
-        try:
-            with st.spinner("Analyzuji korelaci..."):
-                correlation = get_weather_price_correlation(conn, days_back=30)
+    with card("Korelace počasí a cen elektřiny", "Posledních 30 dní", icon="activity",
+              tone="home"):
+        if days_count >= 14:
+            try:
+                with st.spinner("Analyzuji korelaci..."):
+                    correlation = get_weather_price_correlation(conn, days_back=30)
 
-            if correlation:
-                factors = [
-                    ("Teplota", correlation.temperature_correlation,
-                     "Kladná = vyšší teplota → vyšší cena"),
-                    ("Oblačnost", correlation.cloud_cover_correlation,
-                     "Kladná = více mraků → vyšší cena"),
-                    ("Sluneční záření", correlation.solar_radiation_correlation,
-                     "Záporná = více slunce → nižší cena (FVE)"),
-                    ("Rychlost větru", correlation.wind_speed_correlation,
-                     "Záporná = více větru → nižší cena"),
-                ]
+                if correlation:
+                    factors = [
+                        ("Teplota", correlation.temperature_correlation,
+                         "Kladná = vyšší teplota → vyšší cena"),
+                        ("Oblačnost", correlation.cloud_cover_correlation,
+                         "Kladná = více mraků → vyšší cena"),
+                        ("Sluneční záření", correlation.solar_radiation_correlation,
+                         "Záporná = více slunce → nižší cena (FVE)"),
+                        ("Rychlost větru", correlation.wind_speed_correlation,
+                         "Záporná = více větru → nižší cena"),
+                    ]
 
-                cols = st.columns(4)
-                for col, (label, val, help_text) in zip(cols, factors):
-                    with col:
-                        icon = "🔴" if val > 0.3 else "🟢" if val < -0.3 else "🟡"
-                        st.metric(f"{icon} {label}", f"{val:+.2f}", help=help_text)
+                    cols = st.columns(4)
+                    for col, (label, val, help_text) in zip(cols, factors):
+                        with col:
+                            st.metric(label, f"{val:+.2f}", help=help_text)
 
-                st.info(
-                    f"**Nejsilnější faktor:** {correlation.strongest_factor} "
-                    f"&nbsp;|&nbsp; R² = {correlation.r_squared:.3f}"
-                )
+                    st.html(status_box("Nejsilnější faktor", correlation.strongest_factor,
+                                       f"R² = {correlation.r_squared:.3f}", "home"))
 
-                with st.expander("Interpretace korelací"):
-                    st.markdown("""
-                    | Faktor | Vztah | Důvod |
-                    |--------|-------|-------|
-                    | ☀️ Sluneční záření | Záporná korelace | Více slunce = více FVE = nižší ceny |
-                    | 💨 Rychlost větru | Záporná korelace | Více větru = více větrné energie |
-                    | ☁️ Oblačnost | Kladná korelace | Zataženo = méně FVE = vyšší ceny |
-                    | 🌡️ Teplota | Smíšená | Extrémy = vyšší spotřeba = vyšší ceny |
-                    """)
-        except Exception as e:
-            st.warning(f"Korelační analýza není dostupná: {e}")
-    else:
-        st.info(f"Pro korelační analýzu je potřeba alespoň 14 dnů dat. Aktuálně {days_count}.")
+                    with st.expander("Interpretace korelací"):
+                        st.markdown("""
+                        | Faktor | Vztah | Důvod |
+                        |--------|-------|-------|
+                        | Sluneční záření | Záporná korelace | Více slunce = více FVE = nižší ceny |
+                        | Rychlost větru | Záporná korelace | Více větru = více větrné energie |
+                        | Oblačnost | Kladná korelace | Zataženo = méně FVE = vyšší ceny |
+                        | Teplota | Smíšená | Extrémy = vyšší spotřeba = vyšší ceny |
+                        """)
+            except Exception as e:
+                st.warning(f"Korelační analýza není dostupná: {e}")
+        else:
+            st.info(f"Pro korelační analýzu je potřeba alespoň 14 dnů dat. Aktuálně {days_count}.")
 
     conn.close()
 
-    st.markdown("---")
-
     # ── Počasí-enhanced predikce ──
-    st.subheader("Predikce cen s počasím (D+1 až D+5)")
-
     conn = get_connection()
     days_count = get_data_days_count(conn)
 
-    if days_count >= 7:
-        from ote.forecast import get_forecast_for_days_with_weather
-        try:
-            with st.spinner("Vytvářím predikci..."):
-                price_forecasts = get_forecast_for_days_with_weather(conn, days_ahead=5)
+    with card("Predikce cen s počasím", "D+1 až D+5, pásmo = min–max dne", icon="sparkles",
+              tone="accent"):
+        if days_count >= 7:
+            from ote.forecast import get_forecast_for_days_with_weather
+            try:
+                with st.spinner("Vytvářím predikci..."):
+                    price_forecasts = get_forecast_for_days_with_weather(conn, days_ahead=5)
 
-            if price_forecasts:
-                summary_data = []
-                for dt, day_forecasts in sorted(price_forecasts.items()):
-                    ps = [f.price_czk for f in day_forecasts]
-                    summary_data.append({
-                        "Datum": dt, "Den": dt.strftime("%a %d.%m"),
-                        "Min": min(ps), "Max": max(ps), "Průměr": sum(ps) / len(ps),
-                    })
-                summary_df = pd.DataFrame(summary_data)
-
-                band = (
-                    alt.Chart(summary_df)
-                    .mark_area(opacity=0.15, color="#8B5CF6")
-                    .encode(
-                        x=alt.X("Datum:T"),
-                        y=alt.Y("Min:Q", title="CZK/MWh", axis=alt.Axis(format=",.0f")),
-                        y2=alt.Y2("Max:Q"),
+                if price_forecasts:
+                    summary_df = pd.DataFrame([
+                        {
+                            "Datum": dt, "Den": f"{WEEKDAY_CZ[dt.weekday()]} {dt:%d.%m.}",
+                            "Min": min(f.price_czk for f in fs),
+                            "Max": max(f.price_czk for f in fs),
+                            "Průměr": sum(f.price_czk for f in fs) / len(fs),
+                        }
+                        for dt, fs in sorted(price_forecasts.items())
+                    ])
+                    show_chart(range_line_chart(summary_df, "Datum:T", "CZK/MWh", ACCENT,
+                                                height=240, label_field="Den:N"))
+                    st.dataframe(
+                        summary_df[["Den", "Min", "Max", "Průměr"]].rename(columns={
+                            "Min": "Min (CZK/MWh)", "Max": "Max (CZK/MWh)",
+                            "Průměr": "Průměr (CZK/MWh)",
+                        }),
+                        use_container_width=True, hide_index=True,
                     )
-                )
-                line = (
-                    alt.Chart(summary_df)
-                    .mark_line(color="#8B5CF6", strokeWidth=2.5, point=True)
-                    .encode(
-                        x=alt.X("Datum:T", title="Datum"),
-                        y=alt.Y("Průměr:Q"),
-                        tooltip=[
-                            alt.Tooltip("Den:N"), alt.Tooltip("Průměr:Q", format=",.0f"),
-                            alt.Tooltip("Min:Q", format=",.0f"), alt.Tooltip("Max:Q", format=",.0f"),
-                        ],
-                    )
-                )
-                st.altair_chart(
-                    (band + line).properties(height=240, title="Počasí-enhanced predikce").interactive(),
-                    use_container_width=True,
-                )
-                st.dataframe(
-                    summary_df[["Den", "Min", "Max", "Průměr"]].rename(columns={
-                        "Min": "Min (CZK/MWh)", "Max": "Max (CZK/MWh)", "Průměr": "Průměr (CZK/MWh)"
-                    }),
-                    use_container_width=True, hide_index=True,
-                )
-            else:
-                st.info("Nepodařilo se vytvořit predikci.")
-        except Exception as e:
-            st.warning(f"Predikce s počasím není dostupná: {e}")
-    else:
-        st.info(f"Pro predikci je potřeba alespoň 7 dnů. Aktuálně {days_count}.")
+                else:
+                    st.info("Nepodařilo se vytvořit predikci.")
+            except Exception as e:
+                st.warning(f"Predikce s počasím není dostupná: {e}")
+        else:
+            st.info(f"Pro predikci je potřeba alespoň 7 dnů. Aktuálně {days_count}.")
 
     conn.close()
 
