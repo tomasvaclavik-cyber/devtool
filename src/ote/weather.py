@@ -164,6 +164,67 @@ def fetch_weather_forecast(days_ahead: int = 7) -> list[WeatherForecast]:
     return forecasts
 
 
+@dataclass
+class ThreeHourBlock:
+    """Předpověď pro tříhodinový blok (karta „Počasí po 3 hodinách")."""
+
+    start: datetime
+    temperature: float  # °C, průměr bloku
+    precipitation_probability: int  # %, maximum v bloku
+    weather_code: int  # WMO kód
+    is_day: bool
+
+
+def _block_weather_code(codes: list[int]) -> int:
+    """Srážky/bouřka kdekoli v bloku mají přednost, jinak stav uprostřed bloku."""
+    severe = [c for c in codes if c >= 51]
+    return max(severe) if severe else codes[len(codes) // 2]
+
+
+def fetch_three_hour_forecast(days: int = 2) -> list[ThreeHourBlock]:
+    """Načte hodinovou předpověď a seskupí ji do bloků 00–03, 03–06, … 21–24."""
+    params: dict[str, str | int | float] = {
+        "latitude": CZECH_COORDS["latitude"],
+        "longitude": CZECH_COORDS["longitude"],
+        "hourly": "temperature_2m,precipitation_probability,weather_code,is_day",
+        "forecast_days": days,
+        "timezone": "Europe/Prague",
+    }
+    try:
+        response = httpx.get(OPEN_METEO_URL, params=params, timeout=10.0)
+        response.raise_for_status()
+        hourly = response.json().get("hourly", {})
+    except (httpx.HTTPError, httpx.TimeoutException) as e:
+        raise RuntimeError(f"Chyba při načítání počasí: {e}") from e
+
+    blocks: dict[datetime, list[int]] = {}
+    for i, time_str in enumerate(hourly.get("time", [])):
+        dt = datetime.fromisoformat(time_str)
+        start = dt.replace(hour=dt.hour // 3 * 3)
+        blocks.setdefault(start, []).append(i)
+
+    def values(key: str, idx: list[int]) -> list:
+        series = hourly.get(key, [])
+        return [series[i] for i in idx if i < len(series) and series[i] is not None]
+
+    result = []
+    for start, idx in sorted(blocks.items()):
+        temps = values("temperature_2m", idx)
+        codes = values("weather_code", idx)
+        if not temps or not codes:
+            continue
+        probs = values("precipitation_probability", idx)
+        is_day = values("is_day", idx)
+        result.append(ThreeHourBlock(
+            start=start,
+            temperature=sum(temps) / len(temps),
+            precipitation_probability=int(max(probs)) if probs else 0,
+            weather_code=_block_weather_code([int(c) for c in codes]),
+            is_day=bool(is_day[len(is_day) // 2]) if is_day else 8 <= start.hour < 18,
+        ))
+    return result
+
+
 def fetch_historical_weather(target_date: date) -> WeatherForecast | None:
     """Načte historická meteorologická data pro daný den.
 

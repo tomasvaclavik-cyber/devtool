@@ -1,5 +1,6 @@
 """Streamlit dashboard pro vizualizaci spotových cen."""
 
+import base64
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -1591,12 +1592,160 @@ def show_forecast_tab() -> None:
 
 # ─── TAB: Počasí ─────────────────────────────────────────────────────────────
 
+_SVG_SUN = (
+    "<g stroke='#FBBF24' stroke-width='1.6' stroke-linecap='round'>"
+    "<path d='M{x} {y1}v-2.5M{x} {y2}v2.5M{x1} {y}h-2.5M{x2} {y}h2.5'/></g>"
+    "<circle cx='{x}' cy='{y}' r='{r}' fill='#FBBF24'/>"
+)
+_SVG_MOON = "<path d='M{x} {y}a{r} {r} 0 1 0 {d} {d}a{q} {q} 0 0 1 -{d} -{d}z' fill='#FCD34D'/>"
+_SVG_CLOUD = (
+    "<path d='M9 26h15a5 5 0 0 0 .4-10 7 7 0 0 0-13.3 1.6A4.3 4.3 0 0 0 9 26z' "
+    "fill='{fill}'/>"
+)
+
+
+def _sun(x: float, y: float, r: float) -> str:
+    return _SVG_SUN.format(x=x, y=y, r=r, y1=y - r - 1.5, y2=y + r + 1.5,
+                           x1=x - r - 1.5, x2=x + r + 1.5)
+
+
+def _moon(x: float, y: float, r: float) -> str:
+    return _SVG_MOON.format(x=x - r * 0.3, y=y - r, r=r, d=r, q=r * 0.9)
+
+
+def weather_icon(code: int, is_day: bool, size: int = 34, cloud: str = "#CBD5E1") -> str:
+    """SVG ikona podle WMO kódu (Open-Meteo), denní/noční varianta."""
+    celestial = _sun(16, 16, 6) if is_day else _moon(18, 16, 7)
+    small = _sun(12, 11, 4.5) if is_day else _moon(13, 11, 5.5)
+    cloud = _SVG_CLOUD.format(fill=cloud)
+    # Tmavší mrak posunutý nahoru, aby se pod něj vešly kapky / vločky / blesk
+    raised_cloud = f"<g transform='translate(0,-5)'>{_SVG_CLOUD.format(fill='#94A3B8')}</g>"
+    if code == 0:
+        body = celestial
+    elif code in (1, 2):
+        body = small + cloud
+    elif code == 3:
+        body = cloud
+    elif code in (45, 48):
+        body = ("<g stroke='#94A3B8' stroke-width='2' stroke-linecap='round'>"
+                "<path d='M6 12h20M4 17h24M7 22h18'/></g>")
+    elif code >= 95:
+        body = raised_cloud + "<path d='M17 21l-4 6h3l-1.5 4 5-6.5h-3l1.5-3.5z' fill='#FACC15'/>"
+    elif code in (71, 73, 75, 77, 85, 86):
+        body = raised_cloud + "".join(f"<circle cx='{cx}' cy='{cy}' r='1.3' fill='#F1F5F9'/>"
+                      for cx, cy in ((11, 25), (16, 28), (21, 25)))
+    else:  # mrholení, déšť, přeháňky
+        body = (small if code in (80, 81, 82) else "") \
+            + raised_cloud \
+            + "<g stroke='#60A5FA' stroke-width='1.7' stroke-linecap='round'>" \
+            + "<path d='M11 24l-1 3.5M16 24l-1 3.5M21 24l-1 3.5'/></g>"
+    svg = f"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>{body}</svg>"
+    # st.html vyřezává inline SVG, jako obrázek projde
+    data = base64.b64encode(svg.encode()).decode()
+    return f"<img src='data:image/svg+xml;base64,{data}' width='{size}' height='{size}' alt=''>"
+
+
+def show_three_hour_weather_card() -> None:
+    """Karta „Počasí": předpověď po 3 hodinách na dnes a zítra (obdoba karty v HA)."""
+    from ote.weather import ThreeHourBlock, fetch_three_hour_forecast
+
+    try:
+        blocks = fetch_three_hour_forecast(days=2)
+    except RuntimeError as e:
+        st.warning(str(e))
+        return
+    if not blocks:
+        return
+
+    now = datetime.now(PRAGUE_TZ).replace(tzinfo=None)
+    today = now.date()
+    by_day: dict[date, dict[int, ThreeHourBlock]] = {}
+    for b in blocks:
+        by_day.setdefault(b.start.date(), {})[b.start.hour] = b
+
+    header = "".join(
+        f"<div class='w3-head'>{h:02d}–{h + 3:02d}</div>" for h in range(0, 24, 3)
+    )
+    rows = []
+    for day, day_blocks in sorted(by_day.items()):
+        label = "Dnes" if day == today else "Zítra" if day == today + timedelta(days=1) else ""
+        cells = []
+        for h in range(0, 24, 3):
+            b = day_blocks.get(h)
+            if b is None:
+                cells.append("<div class='w3-cell'><div class='w3-temp'>—°</div>"
+                             "<div class='w3-pill'>—%</div></div>")
+                continue
+            past = b.start + timedelta(hours=3) <= now
+            current = b.start <= now < b.start + timedelta(hours=3)
+            temp = round(b.temperature)
+            temp_txt = f"{temp}°".replace("-", "−") if temp != 0 else "0°"
+            cls = "w3-cell" + (" w3-past" if past else "") + (" w3-now" if current else "")
+            cells.append(
+                f"<div class='{cls}' title='{b.start:%H:%M}–{b.start + timedelta(hours=3):%H:%M}'>"
+                f"{weather_icon(b.weather_code, b.is_day)}"
+                f"<div class='w3-temp'>{temp_txt}</div>"
+                f"<div class='w3-pill'>{b.precipitation_probability} %</div></div>"
+            )
+        rows.append(
+            f"<div class='w3-row{' w3-today' if day == today else ''}'>"
+            f"<div class='w3-day'><b>{label}</b><span>{day.day}. {day.month}.</span></div>"
+            f"{''.join(cells)}</div>"
+        )
+
+    st.html(f"""
+    <style>
+      .w3-card {{ background:#111827; border:1px solid #374151; border-top:3px solid #F59E0B;
+                 border-radius:16px; padding:18px 18px 14px; font-family:'Inter',sans-serif;
+                 color:#F9FAFB; }}
+      .w3-title {{ display:flex; align-items:center; gap:14px; margin-bottom:10px; }}
+      .w3-badge {{ width:46px; height:46px; border-radius:50%; background:#3B2F1A;
+                  display:flex; align-items:center; justify-content:center; flex:none; }}
+      .w3-title b {{ font-size:1.25rem; }}
+      .w3-title span {{ display:block; color:#94A3B8; font-size:0.95rem; }}
+      .w3-scroll {{ overflow-x:auto; }}
+      .w3-grid {{ min-width:560px; }}
+      .w3-row, .w3-heads {{ display:grid; grid-template-columns:76px repeat(8, 1fr); }}
+      .w3-head {{ text-align:center; color:#94A3B8; font-size:0.8rem; padding:6px 0; }}
+      .w3-row {{ background:#1A2234; border-radius:14px; margin-top:8px; border-left:4px solid transparent; }}
+      .w3-today {{ border-left-color:#F59E0B; }}
+      .w3-day {{ display:flex; flex-direction:column; justify-content:center; padding-left:10px; }}
+      .w3-day b {{ font-size:1rem; }}
+      .w3-day span {{ color:#94A3B8; font-size:0.85rem; font-weight:600; }}
+      .w3-cell {{ display:flex; flex-direction:column; align-items:center; gap:4px;
+                 padding:10px 0 12px; border-left:1px solid #263045; }}
+      .w3-past {{ opacity:0.4; }}
+      .w3-now {{ background:#F59E0B14; }}
+      .w3-temp {{ font-weight:800; font-size:1.15rem; }}
+      .w3-pill {{ background:#2B3548; color:#CBD5E1; border-radius:999px; padding:2px 9px;
+                 font-size:0.78rem; margin-top:2px; }}
+      .w3-foot {{ color:#94A3B8; font-size:0.85rem; margin-top:12px; }}
+      .w3-foot a {{ color:#CBD5E1; }}
+    </style>
+    <div class='w3-card'>
+      <div class='w3-title'>
+        <div class='w3-badge'>{weather_icon(3, True, 28, cloud="#F59E0B")}</div>
+        <div><b>Počasí</b><span>Předpověď po 3 hodinách na dnes a zítra · Kravaře</span></div>
+      </div>
+      <div class='w3-scroll'><div class='w3-grid'>
+        <div class='w3-heads'><div></div>{header}</div>
+        {''.join(rows)}
+      </div></div>
+      <div class='w3-foot'>Teplota = průměr bloku, % = nejvyšší pravděpodobnost srážek v bloku ·
+        aktualizováno {now:%d. %m. %Y %H:%M} · Data o počasí:
+        <a href='https://open-meteo.com/' target='_blank'>Open-Meteo.com</a></div>
+    </div>
+    """)
+
+
 def show_weather_tab() -> None:
     try:
         from ote.weather import fetch_weather_forecast, get_weather_price_correlation
     except ImportError:
         st.error("Modul počasí není dostupný.")
         return
+
+    show_three_hour_weather_card()
 
     st.subheader("Předpověď počasí — Kravaře (7 dní)")
 
