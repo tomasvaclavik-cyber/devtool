@@ -515,6 +515,150 @@ def show_week_comparison(current: SpotPrice, total: float, low: bool) -> None:
     )
 
 
+# Barvy čáry koncové ceny odspodu nahoru (gradient se roztáhne mezi min a max)
+FINAL_PRICE_STOPS = [
+    alt.GradientStop(color="#22C55E", offset=0),
+    alt.GradientStop(color="#EAB308", offset=0.45),
+    alt.GradientStop(color="#F97316", offset=0.7),
+    alt.GradientStop(color="#EF4444", offset=1),
+]
+
+
+def final_price_chart(
+    days: list[tuple[date, list[SpotPrice]]], now: datetime, height: int = 320,
+) -> alt.LayerChart:
+    """Schodový graf koncové ceny (NT/VT) přes dnešek a zítřek, NT podbarvený."""
+    from ote.tariff import compute_tariff_prices
+
+    rows = []
+    for day, prices in days:
+        for r in compute_tariff_prices([(p.time_from, p.price_czk) for p in prices]):
+            rows.append({
+                # Kategorická osa (temporal se ve Streamlitu vykreslí prázdná) – klíč i s dnem
+                "Slot": f"{day:%d.%m.} {slot_label(r.time_from)}",
+                "Čas": f"{day:%d.%m.} {r.time_from:%H:%M}",
+                "Tarif": "NT" if r.is_low_tariff else "VT",
+                "Celkem (Kč/kWh)": r.total_kwh,
+                "Spot (Kč/kWh)": r.spot_kwh,
+            })
+    df = pd.DataFrame(rows)
+    # Pásy NT přes celou výšku grafu (ve stejném měřítku jako cena)
+    df["band_lo"] = min(0.0, df["Celkem (Kč/kWh)"].min())
+    df["band_hi"] = df["Celkem (Kč/kWh)"].max()
+
+    x = alt.X(
+        "Slot:N", title=None, sort=None,
+        axis=alt.Axis(labelAngle=0, labelColor="#94A3B8", ticks=False, grid=False,
+                      labelExpr="substring(datum.value, 10, 12) == '00' && "
+                                "toNumber(substring(datum.value, 7, 9)) % 6 == 0 "
+                                "? substring(datum.value, 7, 12) : ''"),
+    )
+    y = alt.Y("Celkem (Kč/kWh):Q", title="Kč/kWh",
+              axis=alt.Axis(format=",.0f", gridColor="#1F2937", labelColor="#94A3B8"))
+
+    # Podbarvení NT + neviditelné sloupce pro tooltip přes celou výšku
+    bands = (
+        alt.Chart(df)
+        .mark_bar(width={"band": 1})
+        .encode(
+            x=x, y="band_lo:Q", y2="band_hi:Q",
+            color=alt.Color("Tarif:N", scale=alt.Scale(domain=["NT", "VT"],
+                                                       range=["#22C55E", "#0B1220"]),
+                            legend=None),
+            opacity=alt.condition("datum.Tarif == 'NT'", alt.value(0.12), alt.value(0.01)),
+            tooltip=[
+                alt.Tooltip("Čas:N", title="Čas"),
+                alt.Tooltip("Tarif:N", title="Tarif"),
+                alt.Tooltip("Celkem (Kč/kWh):Q", title="Koncová cena", format=",.2f"),
+                alt.Tooltip("Spot (Kč/kWh):Q", title="Spot bez DPH", format=",.2f"),
+            ],
+        )
+    )
+    area = (
+        alt.Chart(df)
+        .mark_area(interpolate="step-after", opacity=0.22, color=alt.Gradient(
+            gradient="linear", stops=FINAL_PRICE_STOPS, x1=1, x2=1, y1=1, y2=0))
+        .encode(x=x, y=y)
+    )
+    line = (
+        alt.Chart(df)
+        .mark_line(interpolate="step-after", strokeWidth=2.2, color=alt.Gradient(
+            gradient="linear", stops=FINAL_PRICE_STOPS, x1=1, x2=1, y1=1, y2=0))
+        .encode(x=x, y=y)
+    )
+
+    # Půlnoc mezi dny + popisek dne
+    day_df = pd.DataFrame([
+        {"Slot": f"{day:%d.%m.} 00:00", "label": "dnes" if i == 0 else "zítra"}
+        for i, (day, _) in enumerate(days)
+    ])
+    day_rules = (
+        alt.Chart(day_df.iloc[1:])
+        .mark_rule(color="#475569", strokeWidth=1)
+        .encode(x=alt.X("Slot:N", sort=None))
+    )
+    day_labels = (
+        alt.Chart(day_df)
+        .mark_text(align="left", dx=4, color="#94A3B8", fontSize=11)
+        .encode(x=alt.X("Slot:N", sort=None), y=alt.value(8), text="label:N")
+    )
+
+    now_slot = f"{now:%d.%m.} {slot_label(now.replace(minute=now.minute // 15 * 15))}"
+    now_rule = (
+        alt.Chart(pd.DataFrame({"Slot": [now_slot]}))
+        .mark_rule(color="#FBBF24", strokeDash=[4, 3], strokeWidth=1.5)
+        .encode(x=alt.X("Slot:N", sort=None))
+    )
+
+    return (
+        (bands + area + line + day_rules + day_labels + now_rule)
+        .properties(height=height, width="container")
+        .configure_view(strokeWidth=0)
+    )
+
+
+def show_final_price_card(
+    now: datetime, prices: list[SpotPrice], tomorrow_prices: list[SpotPrice],
+    current: SpotPrice | None,
+) -> None:
+    """Karta „Ceny elektřiny": velká aktuální koncová cena + graf NT/VT na dnes a zítra."""
+    from ote.tariff import compute_tariff_prices, czk_mwh_to_kwh, is_low_tariff, total_price_kwh
+
+    days = [(now.date(), prices)]
+    if tomorrow_prices:
+        days.append((now.date() + timedelta(days=1), tomorrow_prices))
+    totals = pd.Series([
+        r.total_kwh
+        for _, day_prices in days
+        for r in compute_tariff_prices([(p.time_from, p.price_czk) for p in day_prices])
+    ])
+
+    with st.container(border=True):
+        period = "Dnes a zítra" if tomorrow_prices else "Dnes"
+        if current is not None:
+            low = is_low_tariff(now.hour)
+            total = total_price_kwh(czk_mwh_to_kwh(current.price_czk), low)
+            badge = price_color(total, *totals.quantile([0.10, 0.30, 0.70, 0.90]))
+            tariff = "NT" if low else "VT"
+            tariff_color = "#22C55E" if low else "#EF4444"
+            st.markdown(
+                f"<div style='display:flex; justify-content:space-between; align-items:center;'>"
+                f"<div style='font-size:1.3rem; font-weight:700; color:#F9FAFB;'>Ceny elektřiny"
+                f"</div><div style='color:#94A3B8;'>{period}</div></div>"
+                f"<div style='margin-top:10px; color:#94A3B8; font-size:0.95rem;'>Nyní "
+                f"<b style='color:{tariff_color};'>{tariff}</b> · s DPH a distribucí</div>"
+                f"<div style='display:inline-block; margin:4px 0 6px; padding:2px 18px; "
+                f"background:{badge}; color:#0B1220; border-radius:10px; font-size:2.6rem; "
+                f"font-weight:800; line-height:1.25;'>{total:.2f} Kč/kWh</div>"
+                f"<div style='color:#94A3B8;'>Min {totals.min():.2f} Kč/kWh · "
+                f"Max {totals.max():.2f} Kč/kWh</div>",
+                unsafe_allow_html=True,
+            )
+        st.altair_chart(final_price_chart(days, now), use_container_width=True)
+        st.caption("Koncová cena za kWh podle tarifu; zeleně podbarvený je nízký tarif (NT), "
+                   "žlutá čárkovaná čára = teď.")
+
+
 def show_my_price_tab() -> None:
     from ote.tariff import (
         DISTRIBUTION_NT,
@@ -550,6 +694,9 @@ def show_my_price_tab() -> None:
     df_today = tariff_df(prices)
     df_tomorrow = tariff_df(tomorrow_prices) if tomorrow_prices else None
     current = get_current_price(prices)
+
+    # ── Karta s koncovou cenou NT/VT ──
+    show_final_price_card(now, prices, tomorrow_prices, current)
 
     # ── Přehled cen ──
     slot = (
