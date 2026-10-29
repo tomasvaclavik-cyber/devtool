@@ -396,8 +396,8 @@ def price_flow_html(spot_kwh: float, low: bool, now: datetime) -> str:
 
     return f"""
     <style>
-      .pf {{ display:grid; grid-template-columns:1fr 34px auto 34px 1fr;
-             grid-template-rows:auto 30px auto 30px auto; align-items:center; justify-items:center;
+      .pf {{ display:grid; grid-template-columns:1fr 56px auto 56px 1fr;
+             grid-template-rows:auto 46px auto 46px auto; align-items:center; justify-items:center;
              max-width:560px; margin:10px auto 0; }}
       .pf-node {{ width:clamp(104px,24vw,150px); aspect-ratio:1; border-radius:50%;
                   border:4px solid var(--c); background:radial-gradient(circle at 50% 35%,
@@ -414,20 +414,56 @@ def price_flow_html(spot_kwh: float, low: bool, now: datetime) -> str:
       .pf-left {{ grid-area:3/1; }} .pf-right {{ grid-area:3/5; }}
       .pf-hub {{ grid-area:3/3; border:2.5px solid {ACCENT}; border-radius:16px;
                  background:#0e1626; padding:14px 16px; text-align:center;
-                 box-shadow:0 0 28px {ACCENT}55, inset 0 0 14px {ACCENT}33; min-width:118px; }}
+                 box-shadow:0 0 28px {ACCENT}55, inset 0 0 14px {ACCENT}33; min-width:118px;
+                 animation:pf-pulse 2.4s ease-in-out infinite; }}
       .pf-hub b {{ display:block; font-size:clamp(22px,4.4vw,30px); font-weight:700;
                    line-height:1.1; margin-top:4px; }}
       .pf-hub span {{ font-size:11.5px; color:{INK_MUTED}; display:block; }}
       .pf-hub .pf-t {{ color:{tariff_color}; font-weight:600; font-size:12px; }}
-      .pf-v {{ width:0; height:100%; border-left:2px dotted #5f6b84; }}
-      .pf-h {{ height:0; width:100%; border-top:2px dotted #5f6b84; }}
+      /* Proudění ke středu: pochodující tečky + zářící „kometa" v barvě zdroje */
+      .pf-flow {{ position:relative; align-self:stretch; justify-self:stretch; }}
+      .pf-flow::before, .pf-flow::after {{ content:""; position:absolute; }}
+      .pf-flow::before {{ background-image:radial-gradient(circle,
+          color-mix(in srgb,var(--c) 75%,transparent) 1.4px, transparent 2px);
+          animation:var(--dots) 0.9s linear infinite; }}
+      .pf-flow::after {{ width:8px; height:8px; border-radius:50%; background:var(--c);
+          box-shadow:0 0 10px 3px color-mix(in srgb,var(--c) 70%,transparent);
+          animation:var(--comet) 1.6s ease-in infinite; animation-delay:var(--delay); }}
+      .pf-down::before, .pf-up::before {{ top:0; bottom:0; left:50%; width:4px; margin-left:-2px;
+          background-size:4px 9px; }}
+      .pf-right::before, .pf-left::before {{ left:0; right:0; top:50%; height:4px;
+          margin-top:-2px; background-size:9px 4px; }}
+      .pf-down::after, .pf-up::after {{ left:50%; margin-left:-4px; }}
+      .pf-right::after, .pf-left::after {{ top:50%; margin-top:-4px; }}
+      .pf-down {{ --dots:pf-dots-down; --comet:pf-comet-down; }}
+      .pf-up {{ --dots:pf-dots-up; --comet:pf-comet-up; }}
+      .pf-right {{ --dots:pf-dots-right; --comet:pf-comet-right; }}
+      .pf-left {{ --dots:pf-dots-left; --comet:pf-comet-left; }}
+      @keyframes pf-dots-down {{ to {{ background-position:0 9px; }} }}
+      @keyframes pf-dots-up {{ to {{ background-position:0 -9px; }} }}
+      @keyframes pf-dots-right {{ to {{ background-position:9px 0; }} }}
+      @keyframes pf-dots-left {{ to {{ background-position:-9px 0; }} }}
+      @keyframes pf-comet-down {{ 0% {{ top:-4px; opacity:0; }} 20%, 80% {{ opacity:1; }}
+          100% {{ top:calc(100% - 4px); opacity:0; }} }}
+      @keyframes pf-comet-up {{ 0% {{ top:calc(100% - 4px); opacity:0; }} 20%, 80% {{ opacity:1; }}
+          100% {{ top:-4px; opacity:0; }} }}
+      @keyframes pf-comet-right {{ 0% {{ left:-4px; opacity:0; }} 20%, 80% {{ opacity:1; }}
+          100% {{ left:calc(100% - 4px); opacity:0; }} }}
+      @keyframes pf-comet-left {{ 0% {{ left:calc(100% - 4px); opacity:0; }}
+          20%, 80% {{ opacity:1; }} 100% {{ left:-4px; opacity:0; }} }}
+      @keyframes pf-pulse {{
+          0%, 100% {{ box-shadow:0 0 24px {ACCENT}44, inset 0 0 12px {ACCENT}2a; }}
+          50% {{ box-shadow:0 0 42px {ACCENT}88, inset 0 0 18px {ACCENT}55; }} }}
+      @media (prefers-reduced-motion: reduce) {{
+        .pf-flow::before, .pf-flow::after, .pf-hub {{ animation:none; }}
+      }}
       .pf-c1 {{ grid-area:2/3; }} .pf-c2 {{ grid-area:4/3; }}
       .pf-c3 {{ grid-area:3/2; }} .pf-c4 {{ grid-area:3/4; }}
       .pf-hub img {{ margin:0 auto; }}
       .pf-wrap {{ container-type:inline-size; }}
       @container (max-width: 480px) {{
-        .pf {{ grid-template-columns:1fr 12px auto 12px 1fr; grid-template-rows:auto 18px auto
-               18px auto; }}
+        .pf {{ grid-template-columns:1fr 22px auto 22px 1fr; grid-template-rows:auto 26px auto
+               26px auto; }}
         .pf-node {{ width:86px; height:86px; border-width:3px; }}
         .pf-node b {{ font-size:15px; margin-top:2px; }}
         .pf-node img {{ width:16px; height:16px; }}
@@ -438,15 +474,15 @@ def price_flow_html(spot_kwh: float, low: bool, now: datetime) -> str:
     </style>
     <div class='pf-wrap'><div class='pf'>
       {node('pf-top', SOLAR, 'zap', spot_vat, 'Spot s DPH', f'{spot_kwh:.2f} bez DPH')}
-      <div class='pf-v pf-c1'></div>
+      <div class='pf-flow pf-down pf-c1' style='--c:{SOLAR};--delay:0s'></div>
       {node('pf-left', tariff_color, 'clock', distribution, 'Distribuce ' + ('NT' if low else 'VT'),
             f"{'NT' if low else 'VT'} do {change:%H:%M}")}
-      <div class='pf-h pf-c3'></div>
+      <div class='pf-flow pf-right pf-c3' style='--c:{tariff_color};--delay:.4s'></div>
       <div class='pf-hub'>{icon_img('home', ACCENT_INK, 22)}<b>{total:.2f}</b>
         <span>Kč/kWh teď</span><span class='pf-t'>{'NÍZKÝ' if low else 'VYSOKÝ'} TARIF</span></div>
-      <div class='pf-h pf-c4'></div>
+      <div class='pf-flow pf-left pf-c4' style='--c:{HOME};--delay:.8s'></div>
       {node('pf-right', HOME, 'coins', fees, 'Poplatky a daň', 'Electree + služby')}
-      <div class='pf-v pf-c2'></div>
+      <div class='pf-flow pf-up pf-c2' style='--c:{ACCENT_INK};--delay:1.2s'></div>
       {node('pf-bottom', ACCENT_INK, 'pole', spot_vat + distribution, 'Energie + síť',
             'bez poplatků')}
     </div></div>
