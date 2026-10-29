@@ -126,13 +126,13 @@ def slot_axis(slots: pd.Series, every: int = 3) -> alt.Axis:
                     labelExpr="substring(datum.value, 7, 12)")
 
 
-def _now_layers(now: datetime | None) -> list[alt.Chart]:
+def _now_layers(now: datetime | None, color: str = READOUT) -> list[alt.Chart]:
     if now is None:
         return []
     now_slot = slot_key(now.date(), now.replace(minute=now.minute // 15 * 15))
     return [
         alt.Chart(pd.DataFrame({"Slot": [now_slot]}))
-        .mark_rule(color=READOUT, strokeDash=[4, 4], strokeWidth=1.5)
+        .mark_rule(color=color, strokeDash=[4, 4], strokeWidth=1.5)
         .encode(x=alt.X("Slot:N", sort=None))
     ]
 
@@ -251,7 +251,9 @@ def multi_line_chart(
                      *[alt.Tooltip(f"{col}:Q", format=y_format) for col in series]],
         )
     )
-    return alt.layer(glow, line, *_day_layers(days), *_now_layers(now), hover).properties(
+    # Čára „teď“ neutrálně, aby se neplétla s barvami sérií
+    now_rule = _now_layers(now, color="#cbd5e1")
+    return alt.layer(glow, line, *_day_layers(days), *now_rule, hover).properties(
         height=height, width="container",
     )
 
@@ -452,14 +454,7 @@ def price_flow_html(spot_kwh: float, low: bool, now: datetime) -> str:
 
 
 def show_overview_page() -> None:
-    from ote.tariff import (
-        DISTRIBUTION_NT,
-        DISTRIBUTION_VT,
-        VAT,
-        compute_tariff_prices,
-        is_low_tariff,
-        sell_price_kwh,
-    )
+    from ote.tariff import compute_tariff_prices, is_low_tariff, sell_price_kwh
 
     now = datetime.now(PRAGUE_TZ)
     today = now.date()
@@ -485,10 +480,8 @@ def show_overview_page() -> None:
             rows.append({
                 "Slot": slot_key(day, r.time_from),
                 "Čas": f"{day:%d.%m.} {r.time_from:%H:%M}",
-                "Koncová cena": r.total_kwh,
-                "Spot s DPH": r.spot_kwh * VAT,
-                "Distribuce": DISTRIBUTION_NT if r.is_low_tariff else DISTRIBUTION_VT,
-                "Výkup": sell_price_kwh(r.spot_kwh),
+                "Nákup": r.total_kwh,
+                "Prodej": sell_price_kwh(r.spot_kwh),
             })
     df = pd.DataFrame(rows)
 
@@ -510,41 +503,45 @@ def show_overview_page() -> None:
 
     with right:
         period = "Dnes a zítra" if tomorrow_prices else "Dnes"
-        with card("Průběh cen", "Koncová cena, spot s DPH a distribuce v Kč/kWh",
+        with card("Průběh cen", "Moje nákupní a prodejní cena v Kč/kWh",
                   icon="line", tone="accent", aside=pill(period, "muted")):
-            series = {"Spot s DPH": SOLAR, "Koncová cena": HOME, "Distribuce": GRID,
-                      "Výkup": BATTERY}
+            series = {"Nákup": READOUT, "Prodej": BATTERY}
             show_chart(multi_line_chart(df, series, "Kč/kWh", now=now, height=300))
             now_slot = slot_key(today, now.replace(minute=now.minute // 15 * 15))
             now_row = df[df["Slot"] == now_slot]
-            table_rows = []
-            notes = {"Spot s DPH": "trh", "Koncová cena": "co platím", "Distribuce": "NT / VT",
-                     "Výkup": "co dostanu"}
-            for col, color in series.items():
-                peak = df.loc[df[col].idxmax()]
-                table_rows.append({
-                    "color": color, "label": col, "note": notes[col],
-                    "now": f"{now_row[col].iloc[0]:.2f} Kč" if not now_row.empty else "—",
-                    "now_time": f"{now:%H:%M}",
-                    "peak": f"{peak[col]:.2f} Kč", "peak_time": peak["Čas"],
-                })
-            st.html(readout_table(table_rows, ("Teď", "Nejvyšší")))
+            # Nejvýhodnější = nejlevnější nákup a nejvyšší prodej
+            best_buy = df.loc[df["Nákup"].idxmin()]
+            best_sell = df.loc[df["Prodej"].idxmax()]
+            table_rows = [
+                {"color": READOUT, "label": "Nákup", "note": "s DPH a distribucí",
+                 "now": f"{now_row['Nákup'].iloc[0]:.2f} Kč" if not now_row.empty else "—",
+                 "now_time": f"{now:%H:%M}",
+                 "peak": f"{best_buy['Nákup']:.2f} Kč", "peak_time": best_buy["Čas"]},
+                {"color": BATTERY, "label": "Prodej", "note": "spot − poplatek",
+                 "now": f"{now_row['Prodej'].iloc[0]:.2f} Kč" if not now_row.empty else "—",
+                 "now_time": f"{now:%H:%M}",
+                 "peak": f"{best_sell['Prodej']:.2f} Kč", "peak_time": best_sell["Čas"]},
+            ]
+            st.html(readout_table(table_rows, ("Teď", "Nejvýhodněji")))
+            st.caption("Nákup = koncová cena s DPH, poplatky a distribucí NT/VT. "
+                       "Prodej = spot bez DPH − 499 Kč/MWh Electree (distribuce se u prodeje "
+                       "neplatí). Nejvýhodněji = nejlevnější nákup a nejvyšší prodej.")
 
     show_sell_card(now, prices, tomorrow_prices, current, height=240)
 
     show_three_hour_weather_card()
 
-    totals = df["Koncová cena"]
+    totals = df["Nákup"]
     today_df = df[df["Slot"].str.startswith(f"{today:%d.%m.}")]
-    cheapest = today_df.loc[today_df["Koncová cena"].idxmin()]
-    priciest = today_df.loc[today_df["Koncová cena"].idxmax()]
-    with card("Dnešní souhrn", "Koncová cena s DPH a distribucí", icon="calendar",
+    cheapest = today_df.loc[today_df["Nákup"].idxmin()]
+    priciest = today_df.loc[today_df["Nákup"].idxmax()]
+    with card("Dnešní souhrn", "Nákupní cena s DPH a distribucí", icon="calendar",
               tone="solar"):
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Průměr dnes", f"{today_df['Koncová cena'].mean():.2f} Kč/kWh")
-        c2.metric("Nejlevněji", f"{cheapest['Koncová cena']:.2f} Kč/kWh",
+        c1.metric("Průměr dnes", f"{today_df['Nákup'].mean():.2f} Kč/kWh")
+        c2.metric("Nejlevněji", f"{cheapest['Nákup']:.2f} Kč/kWh",
                   help=f"Čtvrthodina {cheapest['Čas']}")
-        c3.metric("Nejdráž", f"{priciest['Koncová cena']:.2f} Kč/kWh",
+        c3.metric("Nejdráž", f"{priciest['Nákup']:.2f} Kč/kWh",
                   help=f"Čtvrthodina {priciest['Čas']}")
         c4.metric("Průměr zítra",
                   f"{totals[~df['Slot'].isin(today_df['Slot'])].mean():.2f} Kč/kWh"
