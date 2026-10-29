@@ -361,7 +361,7 @@ def profile(name: str | None, optimal: bool) -> None:
                     avg_price = profile_data.avg_price_czk
                     console.print(f"[dim]Průměrná cena: {avg_price:,.0f} CZK/MWh[/dim]")
                     savings = profile_data.savings_vs_flat_pct
-                    console.print(f"[dim]Úspora oproti flat tarifu: {savings:+.1f}%[/dim]")
+                    console.print(f"[dim]Spot oproti rovnoměrné spotřebě: {savings:+.1f}%[/dim]")
             else:
                 console.print("[yellow]Nedostatek dat pro výpočet optimálního profilu.[/yellow]")
             conn.close()
@@ -395,7 +395,7 @@ def profile(name: str | None, optimal: bool) -> None:
             table.add_row("Průměrná cena (EUR)", f"{profile_data.avg_price_eur:,.2f} EUR/MWh")
 
             savings_color = "green" if profile_data.savings_vs_flat_pct > 0 else "red"
-            table.add_row("Úspora vs flat tarif",
+            table.add_row("Spot vs rovnoměrná spotřeba",
                          f"[{savings_color}]{profile_data.savings_vs_flat_pct:+.1f}%[/{savings_color}]")
 
             table.add_row("Nejlevnější den", profile_data.best_day)

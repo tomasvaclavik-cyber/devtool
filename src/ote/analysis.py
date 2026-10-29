@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ote.db import NegativePriceHour
+    from ote.spot import SpotPrice
 
 
 # --- Consumption Profiles ---
@@ -20,6 +21,7 @@ class ProfileDefinition:
 
     hours: list[int]
     desc: str
+    weekend_only: bool = False
 
 
 CONSUMPTION_PROFILES: dict[str, ProfileDefinition] = {
@@ -32,11 +34,15 @@ CONSUMPTION_PROFILES: dict[str, ProfileDefinition] = {
         hours=[17, 18, 19, 20, 21, 22], desc="Večerní spotřeba (17-23h)"
     ),
     "noční": ProfileDefinition(
-        hours=[22, 23, 0, 1, 2, 3, 4, 5], desc="Noční tarif (22-6h)"
+        hours=[22, 23, 0, 1, 2, 3, 4, 5], desc="Spotřeba v noci (22-6h)"
     ),
     "víkendový": ProfileDefinition(
         hours=[8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18],
         desc="Denní spotřeba o víkendech (8-19h)",
+        weekend_only=True,
+    ),
+    "nízký tarif": ProfileDefinition(
+        hours=[0, 1, 2, 3, 4, 5, 19, 20], desc="Jen v mém nízkém tarifu (0-6h a 19-21h)"
     ),
 }
 
@@ -66,9 +72,14 @@ class ConsumptionProfile:
     hours: list[int]
     avg_price_czk: float
     avg_price_eur: float
-    savings_vs_flat_pct: float  # % úspora oproti celkovému průměru
+    savings_vs_flat_pct: float  # % levnější spot než při rovnoměrné spotřebě celý den
     best_day: str  # nejlevnější den v týdnu
     worst_day: str  # nejdražší den v týdnu
+    # Koncová cena podle mého tarifu (spot s DPH + poplatky + distribuce NT/VT), Kč/kWh
+    avg_total_kwh: float = 0.0
+    flat_total_kwh: float = 0.0  # rovnoměrná spotřeba ve všech čtvrthodinách
+    savings_total_pct: float = 0.0  # % levnější koncová cena než při rovnoměrné spotřebě
+    flat_avg_czk: float = 0.0  # průměrný spot při rovnoměrné spotřebě, CZK/MWh
 
 
 @dataclass
@@ -718,7 +729,8 @@ def analyze_consumption_profile(
     Returns:
         ConsumptionProfile nebo None pokud profil neexistuje.
     """
-    from ote.db import get_overall_stats, get_prices_for_range, get_weekday_aggregates
+    from ote.db import get_prices_for_range, get_weekday_aggregates
+    from ote.tariff import czk_mwh_to_kwh, is_low_tariff, total_price_kwh
 
     if profile_name not in CONSUMPTION_PROFILES:
         return None
@@ -736,31 +748,28 @@ def analyze_consumption_profile(
     if not prices:
         return None
 
+    def in_profile(p: SpotPrice) -> bool:
+        if profile_def.weekend_only and p.time_from.weekday() < 5:
+            return False
+        return p.time_from.hour in hours
+
+    def total(p: SpotPrice) -> float:
+        return total_price_kwh(czk_mwh_to_kwh(p.price_czk), is_low_tariff(p.time_from.hour))
+
     # Filtruj ceny pro hodiny profilu
-    profile_prices_czk: list[float] = []
-    profile_prices_eur: list[float] = []
-
-    for p in prices:
-        if p.time_from.hour in hours:
-            profile_prices_czk.append(p.price_czk)
-            profile_prices_eur.append(p.price_eur)
-
-    if not profile_prices_czk:
+    selected = [p for p in prices if in_profile(p)]
+    if not selected:
         return None
 
-    avg_price_czk = sum(profile_prices_czk) / len(profile_prices_czk)
-    avg_price_eur = sum(profile_prices_eur) / len(profile_prices_eur)
+    avg_price_czk = sum(p.price_czk for p in selected) / len(selected)
+    avg_price_eur = sum(p.price_eur for p in selected) / len(selected)
+    avg_total_kwh = sum(total(p) for p in selected) / len(selected)
 
-    # Celkový průměr pro výpočet úspory
-    overall_stats = get_overall_stats(conn, days_back)
-    if overall_stats:
-        flat_avg = overall_stats["avg"]
-        if flat_avg != 0:
-            savings_vs_flat_pct = ((flat_avg - avg_price_czk) / flat_avg) * 100
-        else:
-            savings_vs_flat_pct = 0.0
-    else:
-        savings_vs_flat_pct = 0.0
+    # Srovnání: rovnoměrná spotřeba ve všech čtvrthodinách stejného období
+    flat_avg = sum(p.price_czk for p in prices) / len(prices)
+    flat_total = sum(total(p) for p in prices) / len(prices)
+    savings_vs_flat_pct = (flat_avg - avg_price_czk) / flat_avg * 100 if flat_avg else 0.0
+    savings_total_pct = (flat_total - avg_total_kwh) / flat_total * 100 if flat_total else 0.0
 
     # Nejlevnější a nejdražší den v týdnu
     weekday_aggregates = get_weekday_aggregates(conn, days_back)
@@ -769,6 +778,8 @@ def analyze_consumption_profile(
     # Průměry pro profil podle dne v týdnu
     weekday_sums: dict[int, list[float]] = {i: [] for i in range(7)}
     for agg in weekday_aggregates:
+        if profile_def.weekend_only and int(agg["weekday"]) < 5:
+            continue
         if int(agg["hour"]) in hours:
             weekday_sums[int(agg["weekday"])].append(float(agg["avg_price"]))
 
@@ -795,6 +806,10 @@ def analyze_consumption_profile(
         savings_vs_flat_pct=savings_vs_flat_pct,
         best_day=best_day,
         worst_day=worst_day,
+        avg_total_kwh=avg_total_kwh,
+        flat_total_kwh=flat_total,
+        savings_total_pct=savings_total_pct,
+        flat_avg_czk=flat_avg,
     )
 
 
@@ -809,7 +824,7 @@ def get_all_profiles_comparison(
         days_back: Počet dnů zpět pro analýzu.
 
     Returns:
-        Seznam profilů seřazený od nejlevnějšího.
+        Seznam profilů seřazený od nejlevnější koncové ceny.
     """
     profiles: list[ConsumptionProfile] = []
 
@@ -818,8 +833,8 @@ def get_all_profiles_comparison(
         if profile:
             profiles.append(profile)
 
-    # Seřaď podle průměrné ceny
-    return sorted(profiles, key=lambda p: p.avg_price_czk)
+    # Seřaď podle koncové ceny (to, co se skutečně platí včetně distribuce NT/VT)
+    return sorted(profiles, key=lambda p: p.avg_total_kwh)
 
 
 def get_optimal_profile(

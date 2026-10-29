@@ -481,8 +481,8 @@ def test_get_all_profiles_comparison(populated_db: sqlite3.Connection) -> None:
     assert len(profiles) > 0
     assert all(isinstance(p, ConsumptionProfile) for p in profiles)
 
-    # Ověř že jsou seřazené od nejlevnějšího
-    prices = [p.avg_price_czk for p in profiles]
+    # Ověř že jsou seřazené od nejlevnější koncové ceny
+    prices = [p.avg_total_kwh for p in profiles]
     assert prices == sorted(prices)
 
 
@@ -674,3 +674,30 @@ def test_peak_analysis_dataclass() -> None:
     assert analysis.threshold_p90 == 2000.0
     assert analysis.total_peaks_30d == 50
     assert 18 in analysis.most_risky_hours
+
+
+def test_weekend_profile_uses_only_weekends(populated_db: sqlite3.Connection) -> None:
+    """Víkendový profil počítá jen soboty a neděle."""
+    profile = analyze_consumption_profile(populated_db, "víkendový", days_back=14)
+
+    assert profile is not None
+    assert profile.best_day in ["So", "Ne"]
+    assert profile.worst_day in ["So", "Ne"]
+
+
+def test_low_tariff_profile_has_cheapest_final_price(populated_db: sqlite3.Connection) -> None:
+    """Koncová cena zahrnuje distribuci NT/VT – spotřeba v NT vychází levněji než rovnoměrná."""
+    profile = analyze_consumption_profile(populated_db, "nízký tarif", days_back=14)
+
+    assert profile is not None
+    assert profile.avg_total_kwh > 0
+    assert profile.avg_total_kwh < profile.flat_total_kwh
+    assert profile.savings_total_pct > 0
+
+
+def test_profiles_sorted_by_final_price(populated_db: sqlite3.Connection) -> None:
+    profiles = get_all_profiles_comparison(populated_db, days_back=14)
+    totals = [p.avg_total_kwh for p in profiles]
+
+    assert totals == sorted(totals)
+    assert len({p.flat_total_kwh for p in profiles}) == 1

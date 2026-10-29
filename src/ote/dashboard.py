@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import altair as alt
+import numpy as np
 import pandas as pd
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
@@ -306,7 +307,7 @@ PAGES = [
     ("show_analysis_tab", "Analýza", ":material/insights:", "analyza",
      "Vzorce, negativní ceny a trendy"),
     ("show_profiles_tab", "Profily & riziko", ":material/shield:", "profily",
-     "Benchmark, spotřebitelské profily a volatilita"),
+     "Benchmark, kdy je spotřeba nejlevnější a volatilita"),
     ("show_forecast_tab", "Predikce", ":material/auto_awesome:", "predikce",
      "Dnes + 6 dní modelem s počasím a jeho přesnost"),
     ("show_weather_tab", "Počasí", ":material/partly_cloudy_day:", "pocasi",
@@ -1486,51 +1487,93 @@ def show_profiles_tab() -> None:
         except Exception:
             st.info("Nelze načíst aktuální cenu z API.")
 
-    # ── Spotřebitelské profily ──
+    # ── Kdy je spotřeba nejlevnější ──
     profiles = get_all_profiles_comparison(conn)
 
     if profiles:
+        flat_total = profiles[0].flat_total_kwh
+        flat_spot = profiles[0].flat_avg_czk / 1000
         profile_df = pd.DataFrame([{
+            "Kdy": p.description,
             "Profil": p.name,
-            "Popis": p.description,
-            "Cena (CZK/MWh)": round(p.avg_price_czk),
-            "Úspora (%)": round(p.savings_vs_flat_pct, 1),
+            "Koncová cena (Kč/kWh)": p.avg_total_kwh,
+            "Oproti rovnoměrné spotřebě (%)": -p.savings_total_pct,
+            "Spot bez DPH (Kč/kWh)": p.avg_price_czk / 1000,
+            "Spot oproti průměru (%)": -p.savings_vs_flat_pct,
             "Nejlevnější den": p.best_day,
         } for p in profiles])
+        profile_df["Výsledek"] = np.where(
+            profile_df["Oproti rovnoměrné spotřebě (%)"] < 0, "levnější", "dražší")
 
-        chart = (
+        y = alt.Y("Kdy:N", sort=None, title=None, axis=alt.Axis(labelFontSize=12, labelLimit=260,
+                                                               grid=False))
+        bars = (
             alt.Chart(profile_df)
-            .mark_bar(cornerRadiusTopLeft=6, cornerRadiusTopRight=6, fillOpacity=0.35,
-                      strokeWidth=2, size=46)
+            .mark_bar(cornerRadiusTopRight=6, cornerRadiusBottomRight=6, fillOpacity=0.35,
+                      strokeWidth=2, size=22)
             .encode(
-                x=alt.X("Profil:N", sort=None, title=None,
-                        axis=alt.Axis(labelFontSize=12, labelAngle=0, grid=False)),
-                y=alt.Y("Cena (CZK/MWh):Q", title="Průměrná cena (CZK/MWh)",
-                        axis=alt.Axis(format=",.0f")),
-                color=alt.condition(
-                    alt.datum["Úspora (%)"] > 0,
-                    alt.value(BATTERY),
-                    alt.value(GRID),
-                ),
-                stroke=alt.condition(
-                    alt.datum["Úspora (%)"] > 0,
-                    alt.value(BATTERY),
-                    alt.value(GRID),
-                ),
-                tooltip=["Profil", "Popis", "Cena (CZK/MWh)", "Úspora (%)", "Nejlevnější den"],
+                x=alt.X("Koncová cena (Kč/kWh):Q", title="Kč/kWh s DPH a distribucí",
+                        axis=alt.Axis(format=",.1f")),
+                y=y,
+                color=alt.Color("Výsledek:N", scale=alt.Scale(domain=["levnější", "dražší"],
+                                                              range=[BATTERY, GRID]),
+                                legend=None),
+                stroke=alt.Stroke("Výsledek:N", scale=alt.Scale(domain=["levnější", "dražší"],
+                                                                range=[BATTERY, GRID]),
+                                  legend=None),
+                tooltip=[
+                    "Kdy",
+                    alt.Tooltip("Koncová cena (Kč/kWh):Q", format=".2f"),
+                    alt.Tooltip("Oproti rovnoměrné spotřebě (%):Q", format="+.1f"),
+                    alt.Tooltip("Spot bez DPH (Kč/kWh):Q", format=".2f"),
+                    "Nejlevnější den",
+                ],
             )
-            .properties(height=280, width="container")
         )
+        labels = (
+            alt.Chart(profile_df)
+            .mark_text(align="left", dx=6, fontSize=12, color="#eef2f8")
+            .encode(x="Koncová cena (Kč/kWh):Q", y=y,
+                    text=alt.Text("Koncová cena (Kč/kWh):Q", format=".2f"))
+        )
+        flat_rule = (
+            alt.Chart(pd.DataFrame({"x": [flat_total],
+                                    "label": [f"rovnoměrně celý den {flat_total:.2f}"]}))
+            .mark_rule(color=READOUT, strokeDash=[6, 4], strokeWidth=1.6)
+            .encode(x="x:Q", tooltip=[alt.Tooltip("label:N", title="Srovnání")])
+        )
+        chart = alt.layer(bars, labels, flat_rule).properties(
+            height=46 * len(profile_df), width="container")
+
         best = profiles[0]
-        with card("Spotřebitelské profily", "Průměrná cena spotřeby podle profilu",
-                  icon="home", tone="home",
-                  aside=pill(f"doporučeno: {best.name}", "battery")):
-            show_chart(chart)
+        with card("Kdy je spotřeba nejlevnější", "Průměr za posledních 30 dní podle mého tarifu "
+                  "(Electree + ČEZ D25d)", icon="home", tone="home",
+                  aside=pill(f"nejlevněji: {best.name}", "battery")):
             st.html(status_box(
-                "Doporučený profil", best.name,
-                f"úspora {best.savings_vs_flat_pct:+.1f} % oproti flat tarifu", "battery",
+                "Nejlevnější je spotřeba", best.description,
+                f"{best.avg_total_kwh:.2f} Kč/kWh – o {best.savings_total_pct:.0f} % méně než "
+                f"při rovnoměrné spotřebě ({flat_total:.2f} Kč/kWh)", "battery",
             ))
-            st.dataframe(profile_df, use_container_width=True, hide_index=True)
+            show_chart(chart)
+            st.caption(
+                "Koncová cena = spot × 1,21 (DPH) + poplatky Electree + systémové služby + daň + "
+                "distribuce podle NT/VT v dané hodině. Oranžová čára = **rovnoměrná spotřeba**: "
+                "stejné množství v každé čtvrthodině dne (dřív tu bylo označení „flat tarif“). "
+                f"Samotný spot bez DPH byl v průměru {flat_spot:.2f} Kč/kWh."
+            )
+            with st.expander("Tabulka"):
+                st.dataframe(
+                    profile_df.drop(columns=["Výsledek"]), use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Koncová cena (Kč/kWh)": st.column_config.NumberColumn(format="%.2f"),
+                        "Oproti rovnoměrné spotřebě (%)": st.column_config.NumberColumn(
+                            format="%+.1f %%"),
+                        "Spot bez DPH (Kč/kWh)": st.column_config.NumberColumn(format="%.2f"),
+                        "Spot oproti průměru (%)": st.column_config.NumberColumn(
+                            format="%+.1f %%"),
+                    },
+                )
 
     # ── Volatilita ──
     metrics = get_volatility_metrics(conn)
