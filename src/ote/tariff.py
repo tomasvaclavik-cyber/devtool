@@ -22,9 +22,6 @@ ENERGY_TAX = 0.03424
 # 499 Kč/MWh s DPH (412,39 Kč bez DPH) = 0,499 Kč/kWh
 SELL_FEE = 0.499
 
-# Násobek pro dlaždici „Bojler" (input_number × 2,4 Kč)
-BOILER_MULTIPLIER = 2.4
-
 # Hodiny nízkého tarifu (HDO) – [od, do)
 LOW_TARIFF_HOURS = ((0, 6), (19, 21))
 
@@ -63,11 +60,6 @@ def low_tariff_price(spot_kwh: float) -> float:
 def high_tariff_price(spot_kwh: float) -> float:
     """Cena ve vysokém tarifu (senzor „Vysoký tarif cena")."""
     return round(total_price_kwh(spot_kwh, low_tariff=False), 4)
-
-
-def boiler_price(value: float) -> float:
-    """Dlaždice „Bojler" – zadaná hodnota × 2,4 Kč."""
-    return round(value * BOILER_MULTIPLIER, 2)
 
 
 def czk_mwh_to_kwh(price_czk_mwh: float) -> float:

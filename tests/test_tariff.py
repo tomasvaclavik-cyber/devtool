@@ -5,7 +5,6 @@ from datetime import datetime
 import pytest
 
 from ote.tariff import (
-    boiler_price,
     compute_tariff_prices,
     czk_mwh_to_kwh,
     high_tariff_price,
@@ -40,10 +39,6 @@ def test_negative_spot() -> None:
     assert total_price_kwh(-0.5, low_tariff=True) == pytest.approx(
         -0.605 + 0.3509 + 0.14097 + 0.19873 + 0.03424
     )
-
-
-def test_boiler_price() -> None:
-    assert boiler_price(4) == 9.6
 
 
 def test_compute_tariff_prices() -> None:

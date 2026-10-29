@@ -904,7 +904,6 @@ def show_my_price_tab() -> None:
         ELECTREE_FEE,
         ENERGY_TAX,
         SYSTEM_SERVICES,
-        boiler_price,
         czk_mwh_to_kwh,
         high_tariff_price,
         is_low_tariff,
@@ -951,7 +950,7 @@ def show_my_price_tab() -> None:
         total = low_tariff_price(spot) if low else high_tariff_price(spot)
     with card("Přehled cen", f"Ceny platí pro interval {slot or '—'}", icon="gauge",
               tone="solar"):
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3 = st.columns(3)
         with col1:
             st.metric("Spot", f"{spot:.2f} Kč/kWh" if spot is not None else "—",
                       help="Aktuální spotová cena bez DPH")
@@ -961,8 +960,6 @@ def show_my_price_tab() -> None:
         with col3:
             st.metric("Vysoký tarif",
                       f"{high_tariff_price(spot):.2f} Kč/kWh" if spot is not None else "—")
-        with col4:
-            boiler_slot = st.empty()
 
         if total is not None:
             st.html(status_box(
@@ -998,14 +995,6 @@ def show_my_price_tab() -> None:
         ))
         if df_tomorrow is None:
             st.caption("Ceny zítra budou k dispozici po 13:10.")
-
-    # ── Bojler ──
-    with card("Bojler", "Hodnota × 2,4 Kč", icon="thermometer", tone="grid"):
-        boiler_value = st.slider("Bojler hodnota", min_value=0.0, max_value=6.0, value=4.0,
-                                 step=0.1, key="boiler_value")
-    with boiler_slot:
-        st.metric("Bojler", f"{boiler_price(boiler_value):.2f} Kč",
-                  help="Bojler hodnota × 2,4 Kč")
 
     with st.expander("Jak se cena počítá"):
         st.markdown(
