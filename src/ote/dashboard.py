@@ -16,6 +16,7 @@ from ote.db import (
     get_data_days_count,
     get_prices_for_date,
 )
+from ote.price_model import Evaluation
 from ote.spot import (
     SpotPrice,
     fetch_spot_prices,
@@ -175,7 +176,8 @@ def gradient_line_chart(
     df["band_lo"] = min(0.0, df[value_col].min())
     df["band_hi"] = df[value_col].max()
     days = _day_keys(df["Slot"])
-    x = alt.X("Slot:N", title=None, sort=None, axis=slot_axis(df["Slot"], 3 if len(days) == 1 else 6))
+    every = 3 if len(days) == 1 else 6
+    x = alt.X("Slot:N", title=None, sort=None, axis=slot_axis(df["Slot"], every))
     y = alt.Y(f"{value_col}:Q", title=y_title, axis=alt.Axis(format=y_format))
 
     # Neviditelné sloupce přes celou výšku nesou tooltip, NT je podbarvený
@@ -225,7 +227,8 @@ def multi_line_chart(
     long = df.melt(id_vars=["Slot"], value_vars=list(series), var_name="Série",
                    value_name="Hodnota")
     days = _day_keys(df["Slot"])
-    x = alt.X("Slot:N", title=None, sort=None, axis=slot_axis(df["Slot"], 3 if len(days) == 1 else 6))
+    every = 3 if len(days) == 1 else 6
+    x = alt.X("Slot:N", title=None, sort=None, axis=slot_axis(df["Slot"], every))
     y = alt.Y("Hodnota:Q", title=y_title, axis=alt.Axis(format=y_format))
     color = alt.Color("Série:N", scale=alt.Scale(domain=list(series), range=list(series.values())),
                       legend=None)
@@ -305,7 +308,7 @@ PAGES = [
     ("show_profiles_tab", "Profily & riziko", ":material/shield:", "profily",
      "Benchmark, spotřebitelské profily a volatilita"),
     ("show_forecast_tab", "Predikce", ":material/auto_awesome:", "predikce",
-     "Zítřejší ceny a statistická prognóza"),
+     "Dnes + 6 dní modelem s počasím a jeho přesnost"),
     ("show_weather_tab", "Počasí", ":material/partly_cloudy_day:", "pocasi",
      "Předpověď pro Kravaře a vliv na ceny"),
 ]
@@ -1614,25 +1617,268 @@ def show_profiles_tab() -> None:
 
 # ─── Predikce ────────────────────────────────────────────────────────────────
 
-def show_forecast_tab() -> None:
+FORECAST_DAYS = 7  # dnes + 6 dní
+
+
+def load_price_frame(days_back: int) -> pd.DataFrame:
+    """Ceny z DB za posledních `days_back` dní + dnešek a zítřek z API (time_from, price_czk)."""
+    from ote.db import get_prices_for_range
+
+    today = date.today()
     conn = get_connection()
+    rows = get_prices_for_range(conn, today - timedelta(days=days_back),
+                                today + timedelta(days=1))
+    conn.close()
+    prices = {p.time_from: p.price_czk for p in rows}
+    # DB se plní jednou denně – dnešek a zítřek doplní živé API
+    for day in (today, today + timedelta(days=1)):
+        if sum(1 for t in prices if t.date() == day) < 90:
+            try:
+                live, _ = fetch_spot_prices(day)
+            except Exception:
+                live = []
+            prices.update({p.time_from: p.price_czk for p in live})
+    df = pd.DataFrame({"time_from": list(prices), "price_czk": list(prices.values())})
+    return df.sort_values("time_from").reset_index(drop=True)
 
-    from ote.forecast import (
-        get_data_sufficiency,
-        get_forecast_for_days,
-        get_tomorrow_prices,
+
+def last_complete_day(prices: pd.DataFrame) -> date:
+    """Poslední den, pro který OTE už zveřejnilo celý den cen."""
+    counts = prices.groupby(prices["time_from"].dt.date).size()
+    return max(d for d, n in counts.items() if n >= 90)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_week_forecast(cache_key: str) -> tuple[pd.DataFrame, date]:
+    """Ceny dnes … dnes+6: skutečnost OTE + predikce modelu (klíč = den + hodina)."""
+    from ote.price_model import TRAIN_DAYS, fetch_weather, forecast
+
+    prices = load_price_frame(TRAIN_DAYS + 5)
+    last_known = last_complete_day(prices)
+    until = date.today() + timedelta(days=FORECAST_DAYS - 1)
+    predicted = forecast(prices, fetch_weather(), last_known, until)
+    return pd.concat([
+        prices[prices["time_from"].dt.date >= date.today()].assign(kind="OTE"),
+        predicted.rename(columns={"predicted": "price_czk"}).assign(kind="predikce"),
+    ], ignore_index=True), last_known
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def cached_evaluation(cache_key: str) -> Evaluation | None:
+    """Backtest modelu na posledních 14 dnech (počasí z tehdejší předpovědi)."""
+    from ote.price_model import TRAIN_DAYS, evaluate, fetch_weather_lagged
+
+    prices = load_price_frame(TRAIN_DAYS + 30)
+    return evaluate(prices, fetch_weather_lagged(past_days=60), origins=14)
+
+
+def week_forecast_chart(df: pd.DataFrame, now: datetime, height: int = 340) -> alt.LayerChart:
+    """Skutečnost OTE (plná čára) + predikce (čárkovaně) s pásmem 10–90 % chyb z backtestu."""
+    days = list(dict.fromkeys(t.date() for t in df["time_from"]))
+    df = df.assign(
+        Slot=[slot_key(t.date(), t) for t in df["time_from"]],
+        Čas=[f"{WEEKDAY_CZ[t.weekday()]} {t:%d.%m. %H:%M}" for t in df["time_from"]],
     )
+    values = [f"{d:%d.%m.} 00:00" for d in days]
+    # Vrstvy mají různá data – pořadí čtvrthodin musí být dané pevně
+    order = list(dict.fromkeys(df.sort_values("time_from")["Slot"]))
+    x = alt.X("Slot:N", title=None, sort=order, scale=alt.Scale(domain=order), axis=alt.Axis(
+        values=values, labelAngle=0, labelExpr="substring(datum.value, 0, 6)"))
+    y_title = "CZK/MWh"
+    actual = df[df["kind"] == "OTE"]
+    pred = df[df["kind"] == "predikce"]
+    # Predikce navazuje na poslední známou čtvrthodinu, aby čáry nebyly přerušené
+    if not actual.empty and not pred.empty:
+        bridge = actual.iloc[[-1]].assign(kind="predikce", low=actual["price_czk"].iloc[-1],
+                                          high=actual["price_czk"].iloc[-1])
+        pred = pd.concat([bridge, pred], ignore_index=True)
+    layers = []
+    if not pred.empty and "low" in pred:
+        layers.append(alt.Chart(pred).mark_area(interpolate="step-after", color=HOME,
+                                                 opacity=0.16)
+                      .encode(x=x, y=alt.Y("low:Q", title=y_title), y2="high:Q"))
+    tooltip = [alt.Tooltip("Čas:N"), alt.Tooltip("kind:N", title="Zdroj"),
+               alt.Tooltip("price_czk:Q", title="CZK/MWh", format=",.0f")]
+    if not actual.empty:
+        layers += [
+            alt.Chart(actual).mark_line(interpolate="step-after", color=SOLAR, strokeWidth=7,
+                                        opacity=0.16).encode(x=x, y="price_czk:Q"),
+            alt.Chart(actual).mark_line(interpolate="step-after", color=SOLAR, strokeWidth=2)
+            .encode(x=x, y=alt.Y("price_czk:Q", title=y_title, axis=alt.Axis(format=",.0f")),
+                    tooltip=tooltip),
+        ]
+    if not pred.empty:
+        layers += [
+            alt.Chart(pred).mark_line(interpolate="step-after", color=HOME, strokeWidth=7,
+                                      opacity=0.16).encode(x=x, y="price_czk:Q"),
+            alt.Chart(pred).mark_line(interpolate="step-after", color=HOME, strokeWidth=2,
+                                      strokeDash=[5, 3])
+            .encode(x=x, y=alt.Y("price_czk:Q", title=y_title, axis=alt.Axis(format=",.0f")),
+                    tooltip=tooltip),
+        ]
+    day_df = pd.DataFrame([{"Slot": v, "label": f"{WEEKDAY_CZ[d.weekday()]} {d:%d.%m.}"}
+                           for v, d in zip(values, days)])
+    layers += [
+        alt.Chart(day_df.iloc[1:]).mark_rule(color="#334155").encode(x=x),
+        alt.Chart(day_df).mark_text(align="left", dx=5, color=INK_MUTED, fontSize=11)
+        .encode(x=x, y=alt.value(8), text="label:N"),
+        alt.Chart(pd.DataFrame({"Slot": [slot_key(now.date(),
+                                                   now.replace(minute=now.minute // 15 * 15))]}))
+        .mark_rule(color=READOUT, strokeDash=[4, 4], strokeWidth=1.5).encode(x=x),
+    ]
+    return alt.layer(*layers).properties(height=height, width="container")
 
+
+def daily_forecast_rows(df: pd.DataFrame) -> list[dict]:
+    """Řádky denního přehledu: průměr, minimum a nejlevnější 2 hodiny dne."""
+    rows = []
+    for day, part in df.groupby(df["time_from"].dt.date):
+        part = part.sort_values("time_from").reset_index(drop=True)
+        window = part["price_czk"].rolling(8).mean()  # 8 čtvrthodin = 2 h
+        start = part.loc[window.idxmin() - 7, "time_from"] if window.notna().any() else None
+        kind = "OTE" if (part["kind"] == "OTE").all() else "predikce"
+        rows.append({
+            "color": SOLAR if kind == "OTE" else HOME,
+            "label": f"{WEEKDAY_CZ[day.weekday()]} {day:%d.%m.}",
+            "note": "OTE" if kind == "OTE" else "predikce",
+            "now": f"{part['price_czk'].mean():,.0f}",
+            "now_time": "",
+            "peak": f"{start:%H:%M}" if start is not None else "—",
+            "peak_time": f"{window.min():,.0f}" if start is not None else "",
+        })
+    return rows
+
+
+def show_forecast_tab() -> None:
+    from ote.forecast import get_data_sufficiency, get_tomorrow_prices
+
+    conn = get_connection()
     sufficiency = get_data_sufficiency(conn)
+    conn.close()
 
     st.sidebar.header("Stav dat")
     st.sidebar.metric("Dnů v historii", sufficiency.total_days)
-    for label, ok in [
-        ("Zítřejší ceny (D+1)", sufficiency.can_show_tomorrow),
-        ("Hodinové vzorce", sufficiency.can_show_hourly_patterns),
-        ("Statistická predikce", sufficiency.can_show_statistical_forecast),
-    ]:
-        st.sidebar.html(pill(("✓ " if ok else "✕ ") + label, "battery" if ok else "grid"))
+
+    now = datetime.now(PRAGUE_TZ)
+    # ── Predikce dnes + 6 dní ──
+    with card("Predikce na 7 dní", "Dnes + 6 dní · skutečnost OTE, dál model s počasím",
+              icon="sparkles", tone="home"):
+        try:
+            with st.spinner("Počítám predikci (model + počasí)..."):
+                week, last_known = cached_week_forecast(f"{now:%Y-%m-%d %H}")
+                evaluation = cached_evaluation(f"{last_known}")
+        except Exception as e:
+            st.error(f"Predikci se nepodařilo spočítat: {e}")
+            return
+
+        if evaluation is not None:
+            q = evaluation.residual_quantiles.set_index("h")
+            pred_mask = week["kind"] == "predikce"
+            week.loc[pred_mask, "low"] = (week.loc[pred_mask, "price_czk"]
+                                          + week.loc[pred_mask, "h"].map(q["q10"]))
+            week.loc[pred_mask, "high"] = (week.loc[pred_mask, "price_czk"]
+                                           + week.loc[pred_mask, "h"].map(q["q90"]))
+
+        predicted = week[week["kind"] == "predikce"]
+        known_until = f"{WEEKDAY_CZ[last_known.weekday()]} {last_known:%d.%m.}"
+        st.html(
+            f"<div style='display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 6px'>"
+            f"{pill(f'OTE známé do {known_until}', 'solar')}"
+            f"{pill(f'predikce {len(predicted) // 96} dní', 'home')}"
+            + (pill(f"průměrná chyba ± {evaluation.mae:,.0f} CZK/MWh", "muted")
+               if evaluation is not None else "")
+            + "</div>"
+        )
+        show_chart(week_forecast_chart(week, now))
+        st.html(readout_table(daily_forecast_rows(week), ("Průměr dne", "Nejlevnější 2 h")))
+        st.caption(
+            "Ceny v CZK/MWh bez DPH. Žlutá = zveřejněné ceny OTE, fialová čárkovaná = predikce; "
+            "fialové pásmo = rozsah, do kterého v backtestu padlo 80 % skutečných cen. "
+            "„Nejlevnější 2 h“ = začátek nejlevnějšího dvouhodinového okna a jeho průměr."
+        )
+
+    # ── Přesnost modelu ──
+    with card("Přesnost modelu", "Poctivý backtest: posledních 14 výchozích dnů, predikce na "
+              "1–6 dní, počasí z tehdejší předpovědi", icon="gauge", tone="accent"):
+        if evaluation is None:
+            st.info("Pro vyhodnocení je potřeba aspoň 37 dní historie cen.")
+        else:
+            gain = (1 - evaluation.mae / evaluation.baseline_mae) * 100
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Chyba modelu (MAE)", f"{evaluation.mae:,.0f} CZK/MWh",
+                      help="Průměrná absolutní chyba čtvrthodinové ceny")
+            c2.metric("Průměr 30 dní (MAE)", f"{evaluation.baseline_mae:,.0f} CZK/MWh",
+                      help="Srovnání: průměr stejné čtvrthodiny za 30 dní (všední den / víkend)")
+            c3.metric("Zlepšení", f"{gain:+.0f} %", help="O kolik je model přesnější než průměr")
+            c4.metric("Chyba denního průměru", f"{evaluation.daily_mae:,.0f} CZK/MWh",
+                      help=f"Systematická odchylka (bias) {evaluation.bias:+,.0f} CZK/MWh; "
+                           "kladná = model cenu podstřeluje")
+
+            by_h = evaluation.by_horizon.rename(columns={
+                "model_mae": "Model s počasím", "baseline_mae": "Průměr 30 dní"})
+            long = by_h.melt(id_vars="h", var_name="Metoda", value_name="MAE")
+            long["Horizont"] = long["h"].map(
+                lambda h: f"{h} {'den' if h == 1 else 'dny' if h < 5 else 'dní'}")
+            color = alt.Color("Metoda:N", scale=alt.Scale(
+                domain=["Model s počasím", "Průměr 30 dní"], range=[HOME, "#5f6b84"]),
+                legend=alt.Legend(title=None, orient="top"))
+            x = alt.X("Horizont:N", sort=None, title=None, axis=alt.Axis(labelAngle=0))
+            y = alt.Y("MAE:Q", title="MAE CZK/MWh", scale=alt.Scale(zero=True),
+                      axis=alt.Axis(format=",.0f"))
+            base = alt.Chart(long)
+            horizon_chart = alt.layer(
+                base.mark_line(strokeWidth=7, opacity=0.16).encode(x=x, y=y, color=color),
+                base.mark_line(strokeWidth=2.2, point=alt.OverlayMarkDef(filled=True, size=50))
+                .encode(x=x, y=y, color=color,
+                        tooltip=["Horizont", "Metoda", alt.Tooltip("MAE:Q", format=",.0f")]),
+            ).properties(height=230, width="container", title="Chyba podle horizontu")
+
+            last = evaluation.last_run
+            last_long = pd.concat([
+                last[["time_from", "actual"]].rename(columns={"actual": "price_czk"})
+                .assign(Série="Skutečnost"),
+                last[["time_from", "predicted"]].rename(columns={"predicted": "price_czk"})
+                .assign(Série="Predikce"),
+            ])
+            last_long["Slot"] = [slot_key(t.date(), t) for t in last_long["time_from"]]
+            first_day = last["time_from"].min().date()
+            values = [f"{first_day + timedelta(days=i):%d.%m.} 00:00" for i in range(6)]
+            run_order = list(dict.fromkeys(last_long.sort_values("time_from")["Slot"]))
+            run_chart = alt.Chart(last_long).mark_line(
+                interpolate="step-after", strokeWidth=1.8,
+            ).encode(
+                x=alt.X("Slot:N", sort=run_order, title=None, axis=alt.Axis(
+                    values=values, labelAngle=0, labelExpr="substring(datum.value, 0, 6)")),
+                y=alt.Y("price_czk:Q", title="CZK/MWh", axis=alt.Axis(format=",.0f")),
+                color=alt.Color("Série:N", scale=alt.Scale(domain=["Skutečnost", "Predikce"],
+                                                           range=[SOLAR, HOME]),
+                                legend=alt.Legend(title=None, orient="top")),
+                strokeDash=alt.StrokeDash("Série:N", scale=alt.Scale(
+                    domain=["Skutečnost", "Predikce"], range=[[1, 0], [5, 3]]), legend=None),
+            ).properties(height=230, width="container",
+                         title=f"Poslední backtest: ceny známé do "
+                               f"{first_day - timedelta(days=1):%d.%m.}")
+            col1, col2 = st.columns(2, gap="medium")
+            with col1:
+                show_chart(horizon_chart)
+            with col2:
+                show_chart(run_chart)
+
+    with st.expander("Jak model funguje"):
+        st.markdown("""
+        - **Model:** gradient boosting (scikit-learn `HistGradientBoostingRegressor`, ztráta MAE),
+          trénuje se znovu z **posledních 30 dní** po 15 minutách; starší dny mají menší váhu
+          (poločas 10 dní). Minulý rok se nepoužívá.
+        - **Vstupy:** čtvrthodina dne, den v týdnu, český svátek a **předpověď počasí**
+          zprůměrovaná přes 8 bodů v ČR a Německu – sluneční záření (FVE), vítr ve 100 m
+          (zvlášť sever Německa), teplota, oblačnost. Zdroj Open-Meteo.
+        - **Cenová hladina:** model předpovídá odchylku od průměru posledních 7 dní, takže drží
+          aktuální úroveň cen.
+        - **Vyhodnocení:** pro každý ze 14 posledních výchozích dnů se model natrénuje jen na
+          tehdy známých datech a počasí se vezme z tehdejší předpovědi (Open-Meteo Previous Runs),
+          ne ze skutečnosti. Pásmo nejistoty = 10.–90. percentil chyb pro daný horizont.
+        - Bez počasí by model nebyl lepší než prostý průměr – rozhoduje hlavně slunce a vítr.
+        """)
 
     # ── Zítřejší ceny ──
     with st.spinner("Načítám zítřejší ceny..."):
@@ -1663,67 +1909,6 @@ def show_forecast_tab() -> None:
                              use_container_width=True, hide_index=True)
         else:
             st.info("Zítřejší ceny zatím nejsou publikovány (OTE zveřejňuje kolem 13:00 CET).")
-
-    # ── Prognóza D+2 až D+7 ──
-    if not sufficiency.can_show_hourly_patterns:
-        st.warning(f"Pro prognózu je potřeba alespoň 7 dnů dat. Aktuálně {sufficiency.total_days}.")
-        conn.close()
-        return
-
-    method = "Statistická predikce" if sufficiency.can_show_statistical_forecast else "Hodinové vzorce"
-    forecasts = get_forecast_for_days(conn, days_ahead=7)
-    if not forecasts:
-        st.info("Nedostatek dat pro prognózu.")
-        conn.close()
-        return
-
-    # Souhrnný přehled všech dní
-    summary_df = pd.DataFrame([
-        {
-            "Datum": target_date,
-            "Den": f"{WEEKDAY_CZ[target_date.weekday()]} {target_date:%d.%m.}",
-            "Min": min(f.price_czk for f in day_forecasts),
-            "Max": max(f.price_czk for f in day_forecasts),
-            "Průměr": sum(f.price_czk for f in day_forecasts) / len(day_forecasts),
-        }
-        for target_date, day_forecasts in forecasts.items()
-    ])
-
-    with card("Statistická prognóza D+2 až D+7", f"Metoda: {method} · pásmo = min–max dne",
-              icon="sparkles", tone="home"):
-        show_chart(range_line_chart(summary_df, "Datum:T", "CZK/MWh", HOME, height=260,
-                                    label_field="Den:N"))
-
-        # Detail po dnech
-        for target_date, day_forecasts in forecasts.items():
-            with st.expander(f"{WEEKDAY_FULL[target_date.weekday()]} {target_date:%d.%m.%Y}",
-                             expanded=False):
-                forecast_df = pd.DataFrame([{
-                    "Slot": slot_key(target_date, f.time_from),
-                    "Hodina": f.time_from.strftime("%H:%M"),
-                    "Predikce (CZK/MWh)": f.price_czk,
-                    "Min": f.confidence_low,
-                    "Max": f.confidence_high,
-                } for f in day_forecasts])
-
-                c1, c2, c3 = st.columns(3)
-                pred_col = "Predikce (CZK/MWh)"
-                with c1:
-                    st.metric("Min", f"{forecast_df[pred_col].min():,.0f} CZK/MWh")
-                with c2:
-                    st.metric("Max", f"{forecast_df[pred_col].max():,.0f} CZK/MWh")
-                with c3:
-                    st.metric("Průměr", f"{forecast_df[pred_col].mean():,.0f} CZK/MWh")
-
-                show_chart(gradient_line_chart(
-                    forecast_df, pred_col, "CZK/MWh",
-                    tooltip=["Hodina", alt.Tooltip(f"{pred_col}:Q", format=",.0f"),
-                             alt.Tooltip("Min:Q", format=",.0f"),
-                             alt.Tooltip("Max:Q", format=",.0f")],
-                    height=220,
-                ))
-
-    conn.close()
 
 
 # ─── Počasí ──────────────────────────────────────────────────────────────────
@@ -1992,45 +2177,17 @@ def show_weather_tab() -> None:
 
     conn.close()
 
-    # ── Počasí-enhanced predikce ──
-    conn = get_connection()
-    days_count = get_data_days_count(conn)
-
-    with card("Predikce cen s počasím", "D+1 až D+5, pásmo = min–max dne", icon="sparkles",
-              tone="accent"):
-        if days_count >= 7:
-            from ote.forecast import get_forecast_for_days_with_weather
-            try:
-                with st.spinner("Vytvářím predikci..."):
-                    price_forecasts = get_forecast_for_days_with_weather(conn, days_ahead=5)
-
-                if price_forecasts:
-                    summary_df = pd.DataFrame([
-                        {
-                            "Datum": dt, "Den": f"{WEEKDAY_CZ[dt.weekday()]} {dt:%d.%m.}",
-                            "Min": min(f.price_czk for f in fs),
-                            "Max": max(f.price_czk for f in fs),
-                            "Průměr": sum(f.price_czk for f in fs) / len(fs),
-                        }
-                        for dt, fs in sorted(price_forecasts.items())
-                    ])
-                    show_chart(range_line_chart(summary_df, "Datum:T", "CZK/MWh", ACCENT,
-                                                height=240, label_field="Den:N"))
-                    st.dataframe(
-                        summary_df[["Den", "Min", "Max", "Průměr"]].rename(columns={
-                            "Min": "Min (CZK/MWh)", "Max": "Max (CZK/MWh)",
-                            "Průměr": "Průměr (CZK/MWh)",
-                        }),
-                        use_container_width=True, hide_index=True,
-                    )
-                else:
-                    st.info("Nepodařilo se vytvořit predikci.")
-            except Exception as e:
-                st.warning(f"Predikce s počasím není dostupná: {e}")
-        else:
-            st.info(f"Pro predikci je potřeba alespoň 7 dnů. Aktuálně {days_count}.")
-
-    conn.close()
+    # ── Predikce cen s počasím (stejný model jako na stránce Predikce) ──
+    with card("Predikce cen s počasím", "Model z posledních 30 dní + předpověď počasí",
+              icon="sparkles", tone="home"):
+        try:
+            with st.spinner("Počítám predikci..."):
+                week, _ = cached_week_forecast(f"{datetime.now(PRAGUE_TZ):%Y-%m-%d %H}")
+            st.html(readout_table(daily_forecast_rows(week), ("Průměr dne", "Nejlevnější 2 h")))
+            st.caption("CZK/MWh bez DPH. Graf, pásmo nejistoty a přesnost modelu jsou na "
+                       "stránce Predikce.")
+        except Exception as e:
+            st.warning(f"Predikce s počasím není dostupná: {e}")
 
 
 if __name__ == "__main__":
