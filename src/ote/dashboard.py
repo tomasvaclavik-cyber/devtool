@@ -1747,12 +1747,12 @@ def last_complete_day(prices: pd.DataFrame) -> date:
 @st.cache_data(ttl=3600, show_spinner=False)
 def cached_week_forecast(cache_key: str) -> tuple[pd.DataFrame, date]:
     """Ceny dnes … dnes+6: skutečnost OTE + predikce modelu (klíč = den + hodina)."""
-    from ote.price_model import TRAIN_DAYS, fetch_weather, forecast
+    from ote.price_model import TRAIN_DAYS, fetch_gas_prices, fetch_weather, forecast
 
     prices = load_price_frame(TRAIN_DAYS + 5)
     last_known = last_complete_day(prices)
     until = date.today() + timedelta(days=FORECAST_DAYS - 1)
-    predicted = forecast(prices, fetch_weather(), last_known, until)
+    predicted = forecast(prices, fetch_weather(), last_known, until, gas=fetch_gas_prices())
     return pd.concat([
         prices[prices["time_from"].dt.date >= date.today()].assign(kind="OTE"),
         predicted.rename(columns={"predicted": "price_czk"}).assign(kind="predikce"),
@@ -1762,10 +1762,11 @@ def cached_week_forecast(cache_key: str) -> tuple[pd.DataFrame, date]:
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
 def cached_evaluation(cache_key: str) -> Evaluation | None:
     """Backtest modelu na posledních 14 dnech (počasí z tehdejší předpovědi)."""
-    from ote.price_model import TRAIN_DAYS, evaluate, fetch_weather_lagged
+    from ote.price_model import TRAIN_DAYS, evaluate, fetch_gas_prices, fetch_weather_lagged
 
     prices = load_price_frame(TRAIN_DAYS + 30)
-    return evaluate(prices, fetch_weather_lagged(past_days=60), origins=14)
+    return evaluate(prices, fetch_weather_lagged(past_days=60), origins=14,
+                    gas=fetch_gas_prices())
 
 
 def week_forecast_chart(df: pd.DataFrame, now: datetime, height: int = 340) -> alt.LayerChart:
@@ -1964,12 +1965,15 @@ def show_forecast_tab() -> None:
         st.markdown("""
         - **Model:** gradient boosting (scikit-learn `HistGradientBoostingRegressor`, ztráta MAE),
           trénuje se znovu z **posledních 30 dní** po 15 minutách; starší dny mají menší váhu
-          (poločas 10 dní). Minulý rok se nepoužívá.
+          (poločas 20 dní). Minulý rok se nepoužívá.
         - **Vstupy:** čtvrthodina dne, den v týdnu, český svátek a **předpověď počasí**
           zprůměrovaná přes 8 bodů v ČR a Německu – sluneční záření (FVE), vítr ve 100 m
           (zvlášť sever Německa), teplota, oblačnost. Zdroj Open-Meteo.
-        - **Cenová hladina:** model předpovídá odchylku od průměru posledních 7 dní, takže drží
-          aktuální úroveň cen.
+        - **Cenová hladina:** model předpovídá odchylku od průměru posledních 14 dní, takže drží
+          aktuální úroveň cen. Hladina se přepočte **cenou plynu TTF** – když plyn za poslední
+          dny zdražil proti průměru okna, posune se úměrně i hladina elektřiny (bere se závěr
+          nejméně 2 dny starý, zdroj Yahoo Finance). Když se plyn stáhnout nepodaří, model jede
+          bez něj.
         - **Vyhodnocení:** pro každý ze 14 posledních výchozích dnů se model natrénuje jen na
           tehdy známých datech a počasí se vezme z tehdejší předpovědi (Open-Meteo Previous Runs),
           ne ze skutečnosti. Pásmo nejistoty = 10.–90. percentil chyb pro daný horizont.

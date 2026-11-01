@@ -3,8 +3,9 @@
 Model: gradient boosting (scikit-learn HistGradientBoostingRegressor, MAE ztráta) natrénovaný
 na posledních 30 dnech po 15 minutách. Vstupy: čtvrthodina dne, den v týdnu, český svátek
 a počasí zprůměrované přes body v ČR a Německu (sluneční záření, vítr ve 100 m, teplota,
-oblačnost). Cílem je odchylka od průměrné ceny posledních 7 dní, takže predikce drží aktuální
-cenovou hladinu. Starší dny mají menší váhu (poločas 10 dní).
+oblačnost). Cílem je odchylka od průměrné ceny posledních 14 dní, takže predikce drží aktuální
+cenovou hladinu; ta se navíc přepočte poměrem ceny plynu TTF teď vs. průměr za stejné okno
+(dražší plyn = dražší elektřina). Starší dny mají menší váhu (poločas 20 dní).
 
 Vyhodnocení je poctivý backtest: pro každý výchozí den se model natrénuje jen na datech,
 která byla tehdy známá, a počasí pro predikované dny se bere z tehdejší předpovědi
@@ -21,13 +22,16 @@ import numpy as np
 import pandas as pd
 
 TRAIN_DAYS = 30
-LEVEL_DAYS = 7
-HALF_LIFE_DAYS = 10
+LEVEL_DAYS = 14
+HALF_LIFE_DAYS = 20
 MAX_HORIZON = 6
 SLOTS_PER_DAY = 96
+# Cena plynu známá ráno daného dne = závěr nejpozději 2 dny předem (konzervativně)
+GAS_LAG_DAYS = 2
 
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 PREVIOUS_RUNS_URL = "https://previous-runs-api.open-meteo.com/v1/forecast"
+GAS_URL = "https://query1.finance.yahoo.com/v8/finance/chart/TTF=F"
 
 # Body pro počasí: ČR + Německo (cenu spoluurčuje FVE na jihu a vítr na severu)
 WEATHER_POINTS = [
@@ -140,6 +144,44 @@ def fetch_weather_lagged(past_days: int = 60) -> dict[int, pd.DataFrame]:
     }
 
 
+def fetch_gas_prices() -> pd.Series:
+    """Denní závěrečné ceny plynu TTF v EUR/MWh (Yahoo Finance); při chybě prázdná řada.
+
+    Denní interval Yahoo pro TTF vrací jen poslední den, proto hodinová data → poslední hodnota dne.
+    """
+    try:
+        response = httpx.get(GAS_URL, params={"range": "3mo", "interval": "1h"},
+                             headers={"User-Agent": "Mozilla/5.0"}, timeout=30.0)
+        response.raise_for_status()
+        result = response.json()["chart"]["result"][0]
+        closes = pd.Series(
+            result["indicators"]["quote"][0]["close"],
+            index=pd.to_datetime(result["timestamp"], unit="s", utc=True).tz_convert(
+                "Europe/Prague"),
+        ).dropna()
+    except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError):
+        return pd.Series(dtype=float)
+    return closes.groupby(closes.index.date).last()
+
+
+def _gas_known(gas: pd.Series) -> dict[date, float]:
+    """Cena plynu známá ráno každého dne (víkendy a dny dopředu převezmou poslední závěr)."""
+    if gas.empty:
+        return {}
+    first, last = min(gas.index), max(gas.index)
+    calendar = pd.Series(gas.to_numpy(), index=pd.to_datetime(list(gas.index))).reindex(
+        pd.date_range(first, last + timedelta(days=TRAIN_DAYS))).ffill()
+    return {d.date(): float(v) for d, v in calendar.shift(GAS_LAG_DAYS).dropna().items()}
+
+
+def _gas_ratio(known: dict[date, float], day: date, window_end: date) -> float:
+    """Kolikrát je plyn známý v `day` dražší než průměr za okno cenové hladiny."""
+    window = [known.get(window_end - timedelta(days=i)) for i in range(LEVEL_DAYS)]
+    if known.get(day) is None or None in window:
+        return 1.0
+    return known[day] / float(np.mean(window))
+
+
 def build_features(slots: pd.DataFrame, weather: pd.DataFrame) -> pd.DataFrame:
     """K čtvrthodinám (sloupec time_from, volitelně price_czk) doplní vstupy modelu."""
     out = slots.copy()
@@ -156,7 +198,7 @@ def build_features(slots: pd.DataFrame, weather: pd.DataFrame) -> pd.DataFrame:
 
 
 def _daily_level(train: pd.DataFrame) -> tuple[dict[date, float], float]:
-    """Úroveň = průměr posledních 7 dní před daným dnem; a úroveň k poslednímu dni."""
+    """Úroveň = průměr posledních 14 dní před daným dnem; a úroveň k poslednímu dni."""
     daily = train.groupby("day")["price_czk"].mean()
     levels = {
         d: daily[(daily.index < d) & (daily.index >= d - timedelta(days=LEVEL_DAYS))].mean()
@@ -167,12 +209,23 @@ def _daily_level(train: pd.DataFrame) -> tuple[dict[date, float], float]:
     return levels, float(current)
 
 
-def fit_predict(train: pd.DataFrame, test: pd.DataFrame) -> np.ndarray:
-    """Natrénuje model na `train` (s price_czk) a vrátí predikci pro řádky `test`."""
+def fit_predict(
+    train: pd.DataFrame, test: pd.DataFrame, gas: pd.Series | None = None,
+) -> np.ndarray:
+    """Natrénuje model na `train` (s price_czk) a vrátí predikci pro řádky `test`.
+
+    gas: denní ceny plynu TTF; hladina se násobí poměrem plynu teď / průměr za okno hladiny.
+    Bez plynu (nebo když se nepodařil stáhnout) model jede jen z cen a počasí.
+    """
     from sklearn.ensemble import HistGradientBoostingRegressor
     from threadpoolctl import threadpool_limits
 
     levels, current_level = _daily_level(train)
+    known = _gas_known(gas) if gas is not None else {}
+    if known:
+        last_day = train["day"].max()
+        levels = {d: v * _gas_ratio(known, d, d - timedelta(days=1)) for d, v in levels.items()}
+        current_level *= _gas_ratio(known, last_day, last_day)
     train = train.assign(level=train["day"].map(levels)).dropna(subset=["level", "solar"])
     origin = train["day"].max()
     age = np.array([(origin - d).days for d in train["day"]], dtype=float)
@@ -212,6 +265,7 @@ def future_slots(start_day: date, days: int) -> pd.DataFrame:
 
 def forecast(
     prices: pd.DataFrame, weather: pd.DataFrame, last_known: date, until: date,
+    gas: pd.Series | None = None,
 ) -> pd.DataFrame:
     """Predikce pro dny po `last_known` až `until` (včetně).
 
@@ -228,13 +282,14 @@ def forecast(
     test = test.dropna(subset=["solar"])
     return pd.DataFrame({
         "time_from": test["time_from"].to_numpy(),
-        "predicted": fit_predict(train, test),
+        "predicted": fit_predict(train, test, gas),
         "h": [(d - last_known).days for d in test["day"]],
     })
 
 
 def evaluate(
     prices: pd.DataFrame, lagged: dict[int, pd.DataFrame], origins: int = 14,
+    gas: pd.Series | None = None,
 ) -> Evaluation | None:
     """Backtest: posledních `origins` výchozích dnů, každý s predikcí na 1–6 dní."""
     analysis = build_features(prices, lagged[0])
@@ -260,7 +315,7 @@ def evaluate(
         if test.empty:
             continue
         runs.append(test.assign(
-            origin=origin, predicted=fit_predict(train, test),
+            origin=origin, predicted=fit_predict(train, test, gas),
             baseline=profile_predict(train, test),
         ))
     if not runs:

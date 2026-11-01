@@ -96,6 +96,25 @@ def test_evaluate_reports_per_horizon() -> None:
     assert (ev.residual_quantiles["q10"] <= ev.residual_quantiles["q90"]).all()
 
 
+def test_gas_scales_level() -> None:
+    weather = synthetic_weather()
+    prices = synthetic_prices(weather)
+    last_known = START + timedelta(days=DAYS - 1)
+    until = last_known + timedelta(days=3)
+    days = [START + timedelta(days=i) for i in range(DAYS)]
+    flat = pd.Series(50.0, index=days)
+    rising = pd.Series([50.0] * (DAYS - 5) + [100.0] * 5, index=days)
+    plain = forecast(prices, weather, last_known, until)
+    # Stejná cena plynu = poměr 1, chybějící plyn = bez úpravy
+    assert np.allclose(forecast(prices, weather, last_known, until, gas=flat)["predicted"],
+                       plain["predicted"])
+    assert np.allclose(
+        forecast(prices, weather, last_known, until, gas=pd.Series(dtype=float))["predicted"],
+        plain["predicted"])
+    up = forecast(prices, weather, last_known, until, gas=rising)
+    assert up["predicted"].mean() > plain["predicted"].mean()
+
+
 def test_evaluate_needs_history() -> None:
     weather = synthetic_weather()
     prices = synthetic_prices(weather, days=20)
