@@ -1,6 +1,7 @@
 """Streamlit dashboard pro vizualizaci spotových cen (vzhled ve stylu SunnyHome)."""
 
 import base64
+import time
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -1769,6 +1770,38 @@ def cached_evaluation(cache_key: str) -> Evaluation | None:
                     gas=fetch_gas_prices())
 
 
+FAILURE_COOLDOWN_S = 15 * 60
+
+
+@st.cache_resource
+def _last_good() -> dict[str, dict]:
+    """Poslední úspěšné výsledky výpočtů (sdílené všemi relacemi procesu)."""
+    return {}
+
+
+def with_fallback(name: str, compute, *args):
+    """Výsledek `compute(*args)`, při chybě poslední úspěšný + text chyby.
+
+    Chyby `st.cache_data` necachuje, takže bez pauzy by každá obnova stránky znovu
+    bušila do Open-Meteo a limit požadavků by se nikdy neuvolnil.
+    """
+    entry = _last_good().setdefault(name, {})
+    failed_at = entry.get("failed_at")
+    if failed_at is not None and time.monotonic() - failed_at < FAILURE_COOLDOWN_S:
+        if "value" in entry:
+            return entry["value"], entry["error"]
+        raise RuntimeError(entry["error"])
+    try:
+        value = compute(*args)
+    except Exception as e:
+        entry["failed_at"], entry["error"] = time.monotonic(), str(e)
+        if "value" in entry:
+            return entry["value"], entry["error"]
+        raise
+    entry.update(value=value, failed_at=None, error=None)
+    return value, None
+
+
 def week_forecast_chart(df: pd.DataFrame, now: datetime, height: int = 340) -> alt.LayerChart:
     """Skutečnost OTE (plná čára) + predikce (čárkovaně) s pásmem 10–90 % chyb z backtestu."""
     days = list(dict.fromkeys(t.date() for t in df["time_from"]))
@@ -1784,13 +1817,14 @@ def week_forecast_chart(df: pd.DataFrame, now: datetime, height: int = 340) -> a
     y_title = "CZK/MWh"
     actual = df[df["kind"] == "OTE"]
     pred = df[df["kind"] == "predikce"]
+    has_band = "low" in pred  # pásmo jen s vyhodnocením modelu
     # Predikce navazuje na poslední známou čtvrthodinu, aby čáry nebyly přerušené
     if not actual.empty and not pred.empty:
         bridge = actual.iloc[[-1]].assign(kind="predikce", low=actual["price_czk"].iloc[-1],
                                           high=actual["price_czk"].iloc[-1])
         pred = pd.concat([bridge, pred], ignore_index=True)
     layers = []
-    if not pred.empty and "low" in pred:
+    if not pred.empty and has_band:
         layers.append(alt.Chart(pred).mark_area(interpolate="step-after", color=HOME,
                                                  opacity=0.16)
                       .encode(x=x, y=alt.Y("low:Q", title=y_title), y2="high:Q"))
@@ -1862,11 +1896,22 @@ def show_forecast_tab() -> None:
               icon="sparkles", tone="home"):
         try:
             with st.spinner("Počítám predikci (model + počasí)..."):
-                week, last_known = cached_week_forecast(f"{now:%Y-%m-%d %H}")
-                evaluation = cached_evaluation(f"{last_known}")
+                (week, last_known), week_error = with_fallback(
+                    "week", cached_week_forecast, f"{now:%Y-%m-%d %H}")
         except Exception as e:
             st.error(f"Predikci se nepodařilo spočítat: {e}")
             return
+        if week_error:
+            st.warning(f"Zobrazuji poslední spočítanou predikci, novou nejde spočítat: "
+                       f"{week_error}")
+        # Backtest potřebuje starší předpovědi počasí; jeho výpadek predikci neblokuje
+        try:
+            with st.spinner("Vyhodnocuji přesnost modelu..."):
+                evaluation, evaluation_error = with_fallback(
+                    "evaluation", cached_evaluation, f"{last_known}")
+        except Exception as e:
+            evaluation, evaluation_error = None, str(e)
+        week = week.copy()
 
         if evaluation is not None:
             q = evaluation.residual_quantiles.set_index("h")
@@ -1897,8 +1942,13 @@ def show_forecast_tab() -> None:
     # ── Přesnost modelu ──
     with card("Přesnost modelu", "Poctivý backtest: posledních 14 výchozích dnů, predikce na "
               "1–6 dní, počasí z tehdejší předpovědi", icon="gauge", tone="accent"):
+        if evaluation_error:
+            st.warning(f"Přesnost modelu teď nejde spočítat (zkusím znovu za 15 min): "
+                       f"{evaluation_error}"
+                       + (" · zobrazuji poslední výsledek" if evaluation is not None else ""))
         if evaluation is None:
-            st.info("Pro vyhodnocení je potřeba aspoň 37 dní historie cen.")
+            if not evaluation_error:
+                st.info("Pro vyhodnocení je potřeba aspoň 37 dní historie cen.")
         else:
             gain = (1 - evaluation.mae / evaluation.baseline_mae) * 100
             c1, c2, c3, c4 = st.columns(4)
@@ -2282,7 +2332,8 @@ def show_weather_tab() -> None:
               icon="sparkles", tone="home"):
         try:
             with st.spinner("Počítám predikci..."):
-                week, _ = cached_week_forecast(f"{datetime.now(PRAGUE_TZ):%Y-%m-%d %H}")
+                (week, _), _ = with_fallback(
+                    "week", cached_week_forecast, f"{datetime.now(PRAGUE_TZ):%Y-%m-%d %H}")
             st.html(readout_table(daily_forecast_rows(week), ("Průměr dne", "Nejlevnější 2 h")))
             st.caption("CZK/MWh bez DPH. Graf, pásmo nejistoty a přesnost modelu jsou na "
                        "stránce Predikce.")

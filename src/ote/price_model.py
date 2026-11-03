@@ -14,6 +14,7 @@ která byla tehdy známá, a počasí pro predikované dny se bere z tehdejší 
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
@@ -32,6 +33,9 @@ GAS_LAG_DAYS = 2
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 PREVIOUS_RUNS_URL = "https://previous-runs-api.open-meteo.com/v1/forecast"
 GAS_URL = "https://query1.finance.yahoo.com/v8/finance/chart/TTF=F"
+# Open-Meteo na sdílené IP Streamlit Cloudu občas vrací 429 (minutový limit) → krátké opakování
+RETRY_STATUSES = {429, 502, 503, 504}
+RETRY_DELAYS = (3.0, 8.0)
 
 # Body pro počasí: ČR + Německo (cenu spoluurčuje FVE na jihu a vítr na severu)
 WEATHER_POINTS = [
@@ -52,6 +56,10 @@ WEATHER_VARS = {
     "cloud_cover": "cloud",
 }
 FEATURES = ["slot", "dow", "holiday", "temp", "solar", "wind", "wind_n", "cloud"]
+
+
+class WeatherApiError(RuntimeError):
+    """Open-Meteo nevrátilo data (limit požadavků, výpadek)."""
 
 
 @dataclass
@@ -101,8 +109,19 @@ def _get_locations(url: str, params: dict[str, str | int]) -> list[dict]:
         "timezone": "Europe/Prague",
         **params,
     }
-    response = httpx.get(url, params=query, timeout=60.0)
-    response.raise_for_status()
+    for delay in (*RETRY_DELAYS, None):
+        response = httpx.get(url, params=query, timeout=60.0)
+        if response.status_code not in RETRY_STATUSES or delay is None:
+            break
+        time.sleep(delay)
+    if response.is_error:
+        # Celé URL má přes 1 000 znaků – do hlášky jen důvod od Open-Meteo
+        try:
+            reason = response.json().get("reason", "")
+        except ValueError:
+            reason = ""
+        raise WeatherApiError(f"Open-Meteo {response.status_code} {response.reason_phrase}"
+                              + (f": {reason}" if reason else ""))
     data = response.json()
     return data if isinstance(data, list) else [data]
 
